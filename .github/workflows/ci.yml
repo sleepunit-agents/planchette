@@ -1,0 +1,33 @@
+name: engine
+# Linux and Windows build on GitHub-hosted runners; macOS is optional (repository variable HOCKET_HOSTED=true).
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    # Run trusted repository branches only.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, windows, macos-latest]
+        exclude: ${{ fromJSON(vars.HOCKET_HOSTED == 'true' && '[]' || '[{"os":"macos-latest"}]') }}
+    name: test (${{ matrix.os }})
+    defaults:
+      run:
+        shell: bash  # Use Git Bash for step scripts.
+    runs-on: ${{ matrix.os == 'linux' && 'ubuntu-latest' || matrix.os == 'windows' && 'windows-latest' || matrix.os }}
+    steps:
+      - name: Git Bash first (a Windows box's bash may be WSL's)
+        if: runner.os == 'Windows'
+        # cmd: PowerShell 7 may not be installed, and Windows PowerShell's default execution policy won't run the step.
+        shell: cmd
+        run: echo C:\Program Files\Git\bin>>"%GITHUB_PATH%"
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test (the same golden render on every platform)
+        run: ctest --test-dir build -C Release --output-on-failure

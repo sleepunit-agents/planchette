@@ -1,0 +1,8 @@
+execute_process(COMMAND "${RENDER}" 0123456789abcdef 64 --mid "${OUTPUT}" RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "MIDI render failed")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${OUTPUT}" "${GOLDEN}/render-0123456789abcdef.mid" RESULT_VARIABLE differs)
+if(NOT differs EQUAL 0)
+  message(FATAL_ERROR "MIDI render differs from its golden bytes")
+endif()

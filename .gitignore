@@ -1,0 +1,8 @@
+build/
+*.mid
+.DS_Store
+build-plugin/
+
+__pycache__/
+
+!tests/golden/*.mid

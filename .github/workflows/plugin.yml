@@ -1,0 +1,93 @@
+name: plugin
+# Linux and Windows build on GitHub-hosted runners; macOS is optional (repository variable HOCKET_HOSTED=true).
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    # Run trusted repository branches only.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, windows, macos-latest]
+        exclude: ${{ fromJSON(vars.HOCKET_HOSTED == 'true' && '[]' || '[{"os":"macos-latest"}]') }}
+    name: build (${{ matrix.os }})
+    defaults:
+      run:
+        shell: bash  # Use Git Bash for step scripts.
+    runs-on: ${{ matrix.os == 'linux' && 'ubuntu-latest' || matrix.os == 'windows' && 'windows-latest' || matrix.os }}
+    steps:
+      - name: Git Bash first (a Windows box's bash may be WSL's)
+        if: runner.os == 'Windows'
+        # cmd: PowerShell 7 may not be installed, and Windows PowerShell's default execution policy won't run the step.
+        shell: cmd
+        run: echo C:\Program Files\Git\bin>>"%GITHUB_PATH%"
+      - uses: actions/checkout@v4
+      - name: Linux build dependencies (GitHub's runner; ours has them installed)
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libxcomposite-dev libgl-dev libasound2-dev xvfb
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DHOCKET_PLUGIN=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      - name: Build
+        shell: bash
+        run: |
+          targets="--target PlanchettePlugin_VST3 --target PlanchetteHostTest --target PlanchetteDocTest --target PlanchetteUiTest --target PlanchettePortTest"
+          if [ "$RUNNER_OS" = macOS ]; then targets="$targets --target PlanchettePlugin_AU"; fi
+          cmake --build build --config Release --parallel 4 $targets
+      - name: Find the builds
+        id: paths
+        shell: bash
+        run: |
+          echo "vst3=$(find build -type d -name 'Planchette.vst3' | head -1)" >> "$GITHUB_OUTPUT"
+          echo "host=$(find build -type f \( -name 'PlanchetteHostTest' -o -name 'PlanchetteHostTest.exe' \) | head -1)" >> "$GITHUB_OUTPUT"
+          echo "doc=$(find build -type f \( -name 'PlanchetteDocTest' -o -name 'PlanchetteDocTest.exe' \) | head -1)" >> "$GITHUB_OUTPUT"
+          echo "ui=$(find build -type f \( -name 'PlanchetteUiTest' -o -name 'PlanchetteUiTest.exe' \) | head -1)" >> "$GITHUB_OUTPUT"
+          echo "port=$(find build -type f \( -name 'PlanchettePortTest' -o -name 'PlanchettePortTest.exe' \) | head -1)" >> "$GITHUB_OUTPUT"
+      - name: A song survives JSON and back
+        shell: bash
+        run: '"${{ steps.paths.outputs.doc }}"'
+      - name: The screens work under a finger
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a "${{ steps.paths.outputs.ui }}"; else "${{ steps.paths.outputs.ui }}"; fi
+      - name: A MIDI port that comes and goes (skips where virtual devices can't be made)
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a "${{ steps.paths.outputs.port }}"; else "${{ steps.paths.outputs.port }}"; fi
+      - name: Plays exactly the engine's notes, as a host loads it
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a "${{ steps.paths.outputs.host }}" "${{ steps.paths.outputs.vst3 }}"
+          else "${{ steps.paths.outputs.host }}" "${{ steps.paths.outputs.vst3 }}"; fi
+      - name: pluginval
+        shell: bash
+        run: |
+          # The validator for this platform (picked here, not in the matrix: an include would re-add excluded jobs).
+          case "$RUNNER_OS" in
+            macOS) zip=pluginval_macOS.zip bin=pluginval.app/Contents/MacOS/pluginval ;;
+            Windows) zip=pluginval_Windows.zip bin=pluginval.exe ;;
+            *) zip=pluginval_Linux.zip bin=pluginval ;;
+          esac
+          curl -sL -o pv.zip "https://github.com/Tracktion/pluginval/releases/download/v1.0.3/$zip"
+          unzip -qo pv.zip -d pv
+          chmod +x "pv/$bin" || true
+          if [ "$RUNNER_OS" = Linux ]; then run="xvfb-run -a"; else run=""; fi
+          # Skip window tests in Windows service sessions; the UI test still exercises the editor.
+          gui=""
+          if [ "$RUNNER_OS" = Windows ] && [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then gui="--skip-gui-tests"; fi
+          $run "pv/$bin" --strictness-level 8 --validate-in-process $gui --validate "${{ steps.paths.outputs.vst3 }}"
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp -R "${{ steps.paths.outputs.vst3 }}" dist/
+          if [ "$RUNNER_OS" = macOS ]; then cp -R "$(find build -type d -name 'Planchette.component' | head -1)" dist/; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Planchette-${{ runner.os }}
+          path: dist/
