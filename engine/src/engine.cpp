@@ -1253,7 +1253,12 @@ std::vector<int> chordRanked(const Song& song, int r) {
     if (song.colour <= 0 || inScale(r + 7, song.root, song.scale)) return rk;
     // No fifth: the chord's fifth is the one the scale has, ♭5 on a minor third (diminished), else ♯5 (augmented).
     const bool minor = inScale(r + 3, song.root, song.scale) && !inScale(r + 4, song.root, song.scale);
-    for (int f : minor ? std::initializer_list<int>{6, 8} : std::initializer_list<int>{8, 6}) {
+    // Two named arrays, not a conditional of two braced lists: a list's array lives only to the end of the expression
+    // that makes it, so the loop would read it after it had gone (GCC at -O2 did, and ranked the chord wrongly).
+    static constexpr int kMinorFirst[2] = {6, 8}, kMajorFirst[2] = {8, 6};
+    const int* fifths = minor ? kMinorFirst : kMajorFirst;
+    for (int k = 0; k < 2; ++k) {
+        const int f = fifths[k];
         const auto it = std::find(rk.begin(), rk.end(), (r + f) % 12);
         if (it == rk.end()) continue;
         const int pc = *it;
