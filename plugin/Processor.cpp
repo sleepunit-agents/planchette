@@ -230,10 +230,16 @@ HocketProcessor::HocketProcessor()
       params(*this, nullptr, "Hocket", layout()) {
     for (int i = 0; i < kSlotParams; ++i) slotParams_.push_back(params.getParameter(slotId(slotRef(i))));
     slotShadow_.assign(static_cast<std::size_t>(kSlotParams), kUnknown);
+    retired_.reserve(kRetired);
     doc_ = hocket::defaultSong(randomSeed());
     song_ = doc_;
     player_ = std::make_unique<hocket::Player>(song_);
     playingBar_ = hocket::barTicks(song_);
+    {
+        hocket::Song neutral = song_;  // §9.3: what's playing, by its live key
+        hocket::neutralLive(neutral);
+        played_.key = hocket::json::toString(neutral);
+    }
     playingMeter_ = packMeter(song_.barLength, song_.beatUnit);
     rebuild();
     devices_ = juce::MidiDeviceListConnection::make([this] { devicesChanged(); });
@@ -352,13 +358,31 @@ void HocketProcessor::rebuild() {
     }
     song_ = s;
     ++version_;
-    auto next = std::make_unique<hocket::Song>(s);
-    std::unique_ptr<hocket::Song> old;
+    // §9.3: a change of live values only is heard from the next step; anything else waits for the bar line. Which it
+    // is depends on the song that is playing: the last one handed over, if the audio thread has taken it.
+    hocket::Song neutral = s;
+    hocket::neutralLive(neutral);
+    const juce::String key = hocket::json::toString(neutral);
+    const bool likePlayed = key == played_.key, likePending = key == pending_.key;
+    // Made ready here: the replay to the playing bar (§2.1) is this thread's work, not the audio thread's.
+    const std::int64_t tick = tick_.load();
+    const std::int64_t bar = hocket::barTicks(s);
+    hocket::Player::ReadyPtr next = hocket::Player::ready(s, tick >= 0 ? tick / bar : 0, frozenFrom_.load());
+    hocket::Player::ReadyPtr old;
+    const int version = ++handVersion_;
+    bool taken = false;
     {
         const juce::SpinLock::ScopedLockType lock(swap_);
+        taken = pending_.version != 0 && playingVersion_.load() == pending_.version;
         old = std::move(incoming_);  // a song still waiting is replaced, not queued
         incoming_ = std::move(next);
+        incomingLive_ = taken ? likePending : likePlayed;
+        incomingVersion_ = version;
+        incomingBar_ = bar;
+        incomingMeter_ = packMeter(s.barLength, s.beatUnit);
     }
+    if (taken) played_ = pending_;
+    pending_ = {version, key};
 }
 
 // One step of the song's undo: the document before and after. Steps in one gesture fold into one.
@@ -617,10 +641,11 @@ void HocketProcessor::timerCallback() {
     // §9.2: a jump, Stop or Play let go of Freeze; its button follows.
     if (freezeReleased_.exchange(false))
         if (auto* f = params.getParameter("freeze")) f->setValueNotifyingHost(0.0f);
-    std::unique_ptr<hocket::Song> old;
+    std::vector<hocket::Player::ReadyPtr> old;
+    old.reserve(kRetired);
     {
         const juce::SpinLock::ScopedLockType lock(swap_);
-        old = std::move(retired_);
+        old.swap(retired_);  // `retired_` keeps room for kRetired, so the audio thread never allocates to add one
     }
     // `old` is freed here, on the message thread, never on the audio thread.
 }
@@ -682,17 +707,23 @@ void HocketProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             events.push_back({juce::jlimit(0, juce::jmax(0, n - 1), static_cast<int>(std::lround(at))), e});
         }
     };
-    // A span of the song, taking on a waiting song at the bar line (§7.3; stopped, at once). What's sounding rings out.
+    // A span of the song, taking on a waiting song: a live change at once (§9.3: heard from the next step), anything
+    // else at the bar line (§7.3; stopped, at once). What's sounding rings out. The song it replaces is the message
+    // thread's to free.
+    auto retire = [&](hocket::Player::ReadyPtr old) {
+        if (old && retired_.size() < retired_.capacity()) retired_.push_back(std::move(old));
+    };
     auto run = [&](std::int64_t a, std::int64_t b, double shift) {
         if (incoming_) {
-            const std::int64_t bar = hocket::barTicks(*incoming_);
-            const std::int64_t line = playing ? (a + bar - 1) / bar * bar : a;
+            const bool live = incomingLive_ && playing;
+            const std::int64_t bar = incomingBar_;
+            const std::int64_t line = live ? a : playing ? (a + bar - 1) / bar * bar : a;
             if (line < b || !playing) {
                 if (line > a) add(player_->process(a, line, true), shift);
-                player_->setSong(*incoming_);
+                retire(player_->take(std::move(incoming_), live));
+                playingVersion_ = incomingVersion_;
                 playingBar_ = bar;
-                playingMeter_ = packMeter(incoming_->barLength, incoming_->beatUnit);
-                retired_ = std::move(incoming_);
+                playingMeter_ = incomingMeter_;
                 add(player_->process(std::max(a, line), b, playing), shift);
                 return;
             }

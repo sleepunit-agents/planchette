@@ -27,6 +27,7 @@ one codebase (§6).
 | 5.8 | **Density from the voices.** A group setting: each member has its own Density, a position inside the group's, and the line's density and the deal's weights are worked out from them. Off by default | each voice has its own density control |
 | 1.2, 4.3 | A voice can override Accent and Gate %: how hard and how long its own notes are. Which hits are accented, and each hit's gate class, stay the group's | so two members of one line can be played apart from a strip each |
 | 12.2 | **Voice slots**: 16 of them, as the 8 group slots; the group slots gain Accent, Gate %, Probability and Reroll; a control with a host parameter reports its touches, so a host's learn mode picks it up | controls can be mapped through the host |
+| 9.3 | **Live changes.** A change that moves only what can't disturb a clock or a seed (Density, a member's Density, Probability, Ratchet, Fill, Accent, Gate %, Mute, Solo member, Weight, Range, Wander, Octave Low/High) is heard from the next step, not the next bar line. Everything else, and the matrix, stays on bar lines | a knob is heard when it is turned, not a bar later |
 
 **How it's played.** The iPad sits above the hardware (Syntakt, Digitone II), running Planchette inside AUM.
 
@@ -758,8 +759,9 @@ Ratchet = fill ? min(100, Ratchet + rdiv(50 · Fill amount, 16)) : Ratchet
   numeric targets of a group; **Fill** is a pick-one (Off / On) of a group (its Fill now) or of the song (Fill). So
   "Leads · Fill · On · every 2 phrases, on the last bar · 50 % · reverts after 1 bar" is a fill that happens at half the
   section ends. By hand: Fill now on the Groups screen, and the song's Fill as a host parameter (§12.2) for a
-  controller's button. Like every edit they take effect on the next bar line (§9.1). They're settings, not live inputs
-  (§2.1): a session saved with one on plays the same on reload.
+  controller's button. They're live changes (§9.3): a fill switched on is busier from the next step, and its extra
+  hits stop at the step after it is switched off. They're still settings, not live inputs (§2.1): a session saved
+  with one on plays the same on reload.
 
 This section adds to the lists in §7.2 (the targets above) and §10 (the settings above, Fill ✓ for the host); it's
 kept in one place here.
@@ -1293,10 +1295,11 @@ Deliberately small. Play / Stop and tempo belong to the host (AUM or Live).
 |---|---|
 | Freeze | pauses the change matrix and every other modulation source (§9.2, §17.6); the current values hold |
 | Per group: Mute, Solo dial | |
+| Per group and per voice: the live values (§9.3) | Density, Probability, Accent, Gate % and the rest of §9.3's list, from the screen or mapped to a controller (§12.2): heard from the next step |
 | Reroll now (per group) | a manual reroll. It's a live input, so it isn't part of the deterministic replay |
 | Panic | §11 |
 
-Everything else is set-up time.
+Everything else is set-up time: it waits for the bar line (§9.1).
 
 ### 9.1 The editor (v1)
 
@@ -1330,7 +1333,8 @@ big buttons. Nothing is a knob.
 
 The key, chord and line settings are host parameters (§12.2); groups, voices and rows are the song document (§12.1). A change to any of them, from the editor,
 host automation or a controller, takes effect on the **next bar line**: notes already sounding ring out as they were,
-and the next ones are the new song's. Generate works the same way. Stopped, a change applies at once.
+and the next ones are the new song's. Generate works the same way. Stopped, a change applies at once. The exception
+is a live change (§9.3), which doesn't wait for the bar line.
 
 Names are scientific pitch (C4 is MIDI 60). A chord is named by what's in it (§3.4): B in C major ranks the tritone
 near last, so its chord is B D A E, named Bm11, not Bm7♭5.
@@ -1360,8 +1364,9 @@ It's a live input (§2.1): never part of the song, never saved, and gone after a
 - **A jump lets go.** A jump, a host loop's wrap, Stop or Play (§6.3: Play starts from somewhere new) releases
   Freeze and switches it off; the button goes off with it. So Freeze is a control for while the song plays: pressed
   while stopped, the next Play lets go of it.
-- **Edits while frozen** apply on the next bar line as always (§9.1), and the hold stays: what plays is the edited
-  song's state at bar F − 1. A knob turn is heard; the modulation stays where it was.
+- **Edits while frozen** apply on the next bar line as always (§9.1), or from the next step if they're live changes
+  (§9.3), and the hold stays: what plays is the edited song's state at bar F − 1. A knob turn is heard; the
+  modulation stays where it was.
 - **Exactly.** A frozen bar is a pure function of the song, F and the bar: `notes(song, from, to, F)` in the engine.
   A Freeze held from F and let go at R plays bars F … R − 1 as that render, and bars from R as the song's own.
 - **In the editor.** The Play screen's form strip and lanes show what plays, so a held B stays B (§7.6). "Next: bar
@@ -1377,6 +1382,53 @@ replay's level     648  882  882  648  412  176  −58  −294
 level heard        648  882  882  882  882  882  −58  −294     // bars 9–12 hold bar 8's; bar 13 is the replay's again
 Density moved by    +3   +4   +4   +4   +4   +4    0   −1
 ```
+
+### 9.3 Live changes
+
+A set played from a controller wants a knob to be heard when it is turned, not a bar later. Most of what a knob does
+can't disturb anything: Density only adds or removes hits (§4.1), Probability only lets fewer of them play (§4.6),
+Accent and Gate % are how hard and how long a note is (§4.3). So those don't wait.
+
+**The live values:**
+
+| Level | Values |
+|---|---|
+| Song | Range, Wander, Accent, Gate %, Octave Low/High, Fill |
+| Group | Density, Probability, Ratchet, Fill now, Mute, Solo member (§5.4), and its own Range, Wander, Accent, Gate % |
+| Voice | Density (§5.8), Weight, Mute, and its own Range, Wander, Accent, Gate %, Octave Low/High |
+
+None of them moves a clock (§4.4) or a seed (§2.2), so the grid, the anchors and every roll stay where they were.
+
+**The rule.** A change is **live** when the song after it differs from the song before it only in live values.
+Then:
+
+- **It is heard from the next step.** A step that hasn't begun is played from the new song: whether it's a hit, who
+  plays it, its note, velocity and length.
+- **A step that has begun is played as it was decided.** Its note rings out as it was, and so do what it had still
+  to play: a late note (Swing, Feel: timing, §4.7) and a ratchet's repeats (§4.6).
+- **Nothing else moves.** It is the same song with a value changed, taken up mid-bar: no re-anchor, no reroll, no
+  new matrix roll. A sustained chord holds until the harmony next changes.
+
+A change that moves anything else waits for the bar line, as §9.1 says, and so does a change that moves a live
+value and something else together (a song loaded, an Undo that brings back several things): all of it lands at once.
+
+- **From anywhere.** The editor, host automation and a mapped controller are the same change (§12.2).
+- **The matrix stays on bar lines.** Rows, cords and levels act at bar lines only (§7.3, §17.4). A live value is the
+  base they move from, so a row's walk carries on from where the knob now is, at the next bar line it acts on.
+  Turning a knob never fires a row or reseeds one.
+- **A member's Density is the one to map** for how busy a voice is (§5.8): it is a place inside the group's Density,
+  so the matrix can walk the group's Density under it and the knob keeps meaning what it meant.
+- **Freeze** (§9.2) holds the modulation, not the hands: a live change is heard while frozen.
+- **Not a live input.** A live change is an edit of the song (or the host's value), so it is saved and reloads as
+  set. Where inside a bar it fell isn't kept: played again from the same place, the song is as it now stands (§2.1).
+- **How soon.** The plugin looks for moved host parameters at least 20 times a second, so a turn is heard within
+  50 ms plus the wait for the next step.
+
+**What it mustn't cost.** Taking a changed song means working out its state at the bar that is playing, and from a
+cold start that is a replay from bar 0 (§2.1): measured on a desktop with the default song and its long-form rows,
+3 to 4 ms at bar 1,000 and 11 to 17 ms at bar 4,000. Done on the audio thread for every notch of a turning knob, that is a dropout in a long set. So the changed song's state at
+the playing bar is worked out before it is handed to the audio thread, which only swaps it in; and a change still
+waiting when the next one arrives is replaced, not queued.
 
 ## 10. Parameters
 

@@ -663,6 +663,91 @@ int main() {
         q.removeListener(&touches);
     }
 
+
+    // §9.3: live changes. Under a running host, a live value the host moves is heard from the next step; a value that
+    // moves a clock waits for the bar line.
+    {
+        struct Head : juce::AudioPlayHead {
+            double ppq = 0.0;
+            juce::Optional<PositionInfo> getPosition() const override {
+                PositionInfo p;
+                p.setPpqPosition(ppq);
+                p.setBpm(120.0);
+                p.setIsPlaying(true);
+                return p;
+            }
+        };
+        HocketProcessor q;
+        q.setSeed(0x0123456789ABCDEFull);
+        q.edit([](hocket::Song& x) {
+            x.matrix.clear();
+            x.mod = hocket::Mod();
+            for (hocket::Group& g : x.groups) g.swing = 0, g.jitter = 0, g.density = 3;
+        });
+        q.endGesture();
+        auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil(150); };
+        pump();
+        Head head;
+        q.setPlayHead(&head);
+        q.prepareToPlay(48000.0, 256);
+        const double ticksPerSample = 2.0 * hocket::kTicksPerBeat / 48000.0;  // 120 bpm
+        const std::int64_t step = hocket::kTicksPerBeat / 4, bar = hocket::barTicks(q.song());
+        std::int64_t sample = 0;
+        // The leads' note-ons (channels 1 and 2), in order, with the tick each fell on.
+        std::vector<std::pair<std::int64_t, std::pair<int, int>>> heard;
+        auto play = [&](std::int64_t untilTick) {
+            juce::AudioBuffer<float> audio(2, 256);
+            while (static_cast<double>(sample) * ticksPerSample < static_cast<double>(untilTick)) {
+                head.ppq = static_cast<double>(sample) * ticksPerSample / hocket::kTicksPerBeat;
+                juce::MidiBuffer midi;
+                q.processBlock(audio, midi);
+                for (const auto meta : midi) {
+                    const auto m = meta.getMessage();
+                    if (m.isNoteOn() && m.getChannel() <= 2)
+                        heard.push_back({static_cast<std::int64_t>(std::llround((sample + meta.samplePosition) * ticksPerSample)), {m.getChannel(), m.getNoteNumber()}});
+                }
+                sample += 256;
+            }
+        };
+        auto heardIn = [&](std::int64_t from, std::int64_t to) {
+            std::vector<std::pair<int, int>> out;
+            for (const auto& h : heard)
+                if (h.first >= from && h.first < to) out.push_back(h.second);
+            return out;
+        };
+        auto songIn = [&](const hocket::Song& x, std::int64_t from, std::int64_t to) {
+            std::vector<std::pair<int, int>> out;
+            for (const hocket::Note& n : hocket::notes(x, from, to))
+                if (n.channel <= 2) out.push_back({n.channel, n.note});
+            return out;
+        };
+        auto host = [&](const char* id, int v) {
+            auto* x = q.params.getParameter(id);
+            if (x) x->setValueNotifyingHost(x->convertTo0to1(static_cast<float>(v)));
+            pump();
+        };
+        const std::int64_t half = step / 2;
+        // Bars 0 and 1 and six steps of bar 2 as the song is; then Group 1 Density goes to 16, mid-bar.
+        const hocket::Song sparse = q.song();
+        const std::int64_t turn = 2 * bar + 6 * step + half;
+        play(turn);
+        host("g1_density", 16);
+        const hocket::Song busy = q.song();
+        play(3 * bar + 6 * step + half);
+        check(heardIn(0, turn) == songIn(sparse, 0, turn) && songIn(sparse, 0, turn).size() < 30, "before the turn: the song as it was");
+        check(heardIn(turn, 3 * bar - half) == songIn(busy, turn, 3 * bar - half) && songIn(busy, turn, 3 * bar - half).size() == 9,
+              "Group 1 Density turned up mid-bar: every step from the next one plays, in the same bar");
+        // Then its Steps go to 5, mid-bar 3: a clock, so the rest of the bar is as it was, and bar 4 is the new song.
+        const std::int64_t clock = 3 * bar + 6 * step + half;
+        host("g1_steps", 5);
+        const hocket::Song five = q.song();
+        play(5 * bar);
+        check(heardIn(clock, 4 * bar - half) == songIn(busy, clock, 4 * bar - half) && songIn(busy, clock, 4 * bar - half) != songIn(five, clock, 4 * bar - half),
+              "Group 1 Steps changed mid-bar: the bar plays on as it was");
+        check(heardIn(4 * bar - half, 5 * bar - half) == songIn(five, 4 * bar - half, 5 * bar - half), "and the next bar line takes it");
+        q.setPlayHead(nullptr);
+    }
+
     p.editorBeingDeleted(e.get());
     e.reset();
     std::printf("%s\n", failures ? "UI test failed" : "UI test passed");
