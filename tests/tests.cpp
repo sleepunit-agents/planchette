@@ -3330,6 +3330,105 @@ static void densityFromVoices() {
     CHECK(firstSame && starts2 && some && loud && shorter);
 }
 
+// §9.3, live changes: a ready song taken mid-bar plays from the next step, and a step that has begun plays as it was
+// decided.
+static void liveChanges() {
+    using Key = std::tuple<std::int64_t, int, int, int>;  // an on: tick, channel, note, velocity
+    auto ons = [](const std::vector<Event>& es) {
+        std::multiset<Key> out;
+        for (const Event& e : es)
+            if (e.kind == Event::On) out.insert({e.tick, e.channel, e.note, e.velocity});
+        return out;
+    };
+    auto onsOf = [](const std::vector<Note>& ns, std::int64_t from, std::int64_t to) {
+        std::multiset<Key> out;
+        for (const Note& n : ns)
+            if (n.start >= from && n.start < to) out.insert({n.start, n.channel, n.note, n.velocity});
+        return out;
+    };
+    Song a = defaultSong(0x1234);
+    a.matrix.clear();
+    for (Group& g : a.groups) g.swing = 0, g.jitter = 0;
+    Song b = a;  // the same song, busier and louder: live values only
+    b.groups[0].density = 16, b.groups[1].density = 14, b.accent = 100, b.groups[0].voices[0].mute = true;
+    const std::int64_t bt = barTicks(a), step = bt / 16;
+    const std::int64_t mid = 2 * bt + 6 * step, end = 4 * bt;  // taken six steps into bar 2
+
+    // Taken live: the old song's notes up to the change, the new song's from the next step, on the same grid.
+    Player live(a);
+    std::vector<Event> heard = live.process(0, mid, true);
+    Player::ReadyPtr old = live.take(Player::ready(b, 2), true);
+    CHECK(old != nullptr);
+    for (const Event& e : live.process(mid, end, true)) heard.push_back(e);
+    std::multiset<Key> want = onsOf(notes(a, 0, end), 0, mid);
+    for (const Key& k : onsOf(notes(b, 0, end), mid, end)) want.insert(k);
+    CHECK(ons(heard) == want);
+    CHECK(onsOf(notes(a, 0, end), mid, end) != onsOf(notes(b, 0, end), mid, end));  // and the change is one you'd hear
+    // Block size doesn't matter: the same in blocks of a third of a step.
+    Player small(a);
+    std::vector<Event> pieces;
+    for (std::int64_t t = 0; t < end; t += step / 3) {
+        if (t == mid) small.take(Player::ready(b, 2), true);
+        for (const Event& e : small.process(t, std::min(end, t + step / 3), true)) pieces.push_back(e);
+    }
+    CHECK(ons(pieces) == want);
+    // Every note that starts is ended: nothing is left sounding by the swap.
+    int on = 0, off = 0;
+    for (const Event& e : heard) (e.kind == Event::On ? on : off)++;
+    for (const Event& e : live.allOff(end)) off += e.kind == Event::Off;
+    CHECK(on == off);
+
+    // A step that has begun plays what it had left. With Swing, an odd step's note sounds after the step begins: a
+    // live change in between leaves it, and a change on a bar line's terms (not live) drops it, as setSong does.
+    Song sa = a, sb = b;
+    for (Song* x : {&sa, &sb})
+        for (Group& g : x->groups) g.swing = 80, g.density = 16;
+    sb.groups[0].probability = 100, sb.accent = 20;  // still live values only
+    const std::int64_t odd = 2 * bt + 5 * step, between = odd + step / 8;  // step 5 has begun; its swung note hasn't sounded
+    const std::multiset<Key> late = onsOf(notes(sa, 0, end), between, odd + step);
+    CHECK(!late.empty());
+    auto after = [&](bool isLive) {
+        Player p(sa);
+        p.process(0, between, true);
+        p.take(Player::ready(sb, 2), isLive);
+        return ons(p.process(between, odd + step, true));
+    };
+    CHECK(after(true) == late);
+    CHECK(after(false).empty());
+
+    // neutralLive: songs that differ only in live values come out with every live value the same; a clock doesn't.
+    Song na = a, nb = b;
+    nb.groups[2].voices[0].overrides.gatePercent = 40, nb.groups[1].probability = 60, nb.fill = 1, nb.octaveLow = 0, nb.groups[0].soloMember = 1;
+    nb.groups[0].voices[1].density = 3, nb.groups[0].voices[1].weight = 2, nb.groups[1].overrides.range = 12, nb.groups[1].fillNow = true;
+    neutralLive(na), neutralLive(nb);
+    CHECK(notes(na, 0, end) == notes(nb, 0, end));
+    Song nc = a;
+    nc.groups[0].steps = 12;
+    neutralLive(nc);
+    CHECK(notes(nc, 0, end) != notes(na, 0, end));
+
+    // A ready song's state at its bar is worked out before it's taken: the first step after taking it costs no replay.
+    Song lf = defaultSong(0x0123456789ABCDEFull);
+    addLongForm(lf, true);
+    const std::int64_t far = 3000;
+    Player cold(lf), warm(lf);
+    const auto t0 = std::chrono::steady_clock::now();
+    cold.setSong(lf);
+    cold.process(far * bt, far * bt + step, true);
+    const auto t1 = std::chrono::steady_clock::now();
+    Player::ReadyPtr r = Player::ready(lf, far);
+    const auto t2 = std::chrono::steady_clock::now();
+    warm.take(std::move(r), false);
+    const std::vector<Event> first = warm.process(far * bt, far * bt + step, true);
+    const auto t3 = std::chrono::steady_clock::now();
+    auto ms = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
+    std::printf("  live changes, bar %lld of a long-form song: taking it cold %.2f ms; made ready %.2f ms off the audio thread, then %.3f ms to take and play\n",
+                static_cast<long long>(far), ms(t0, t1), ms(t1, t2), ms(t2, t3));
+    CHECK(ms(t2, t3) * 4 < ms(t0, t1));  // the audio thread's share is a fraction of the cold replay
+    Player again(lf);
+    CHECK(ons(first) == ons(again.process(far * bt, far * bt + step, true)));
+}
+
 int main() {
     arithmetic();
     priority();
@@ -3350,6 +3449,7 @@ int main() {
     nextFirings();
     dealing();
     densityFromVoices();
+    liveChanges();
     songChanges();
     chanceRatchetsFills();
     documents();

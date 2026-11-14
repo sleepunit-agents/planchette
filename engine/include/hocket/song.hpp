@@ -198,6 +198,13 @@ void addLongForm(Song& song, bool home);
 // divide by zero or keep the engine looping.
 void sanitize(Song& song);
 
+// §9.3: the live values, each set to one fixed value, so that two songs that differ only in live values come out the
+// same. A change between two such songs is a live change: it moves no clock and no seed, and is heard from the next
+// step. The song's: Range, Wander, Accent, Gate %, Octave Low/High, Fill. A group's: Density, Probability, Ratchet,
+// Fill now, Mute, Solo member, and its own Range, Wander, Accent, Gate %. A voice's: Density, Weight, Mute, and its
+// own Range, Wander, Accent, Gate %, Octave Low/High.
+void neutralLive(Song& song);
+
 // §2.2: new seeds for everything not locked. Settings, groups, voices and rows stay as they are.
 void generate(Song& song);
 // One thing re-rolled (the editor's Reroll and New progression), counted like a Generate so it stays reproducible.

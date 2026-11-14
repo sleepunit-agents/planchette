@@ -145,6 +145,7 @@ private:
     hocket::Song display_;      // the letter as the screens show it
     int version_ = 0;
     std::vector<float> lastValues_;
+    static constexpr std::size_t kRetired = 16;    // songs the audio thread can let go of between two timer ticks
     static constexpr int kUnknown = -100000;       // a slot's value not yet taken from the song
     std::vector<juce::RangedAudioParameter*> slotParams_;
     std::vector<int> slotShadow_;                  // each slot parameter's value as last agreed with the song
@@ -153,7 +154,24 @@ private:
     // The audio thread's player, and a song waiting for the next bar line (handed over under `swap_`).
     juce::SpinLock swap_;
     std::unique_ptr<hocket::Player> player_;
-    std::unique_ptr<hocket::Song> incoming_, retired_;
+    // The waiting song is made ready on the message thread (§9.3: its state at the playing bar worked out), so the
+    // audio thread only swaps it in: at once when the change is live, else on the bar line. What it replaces goes to
+    // `retired_`, which the message thread frees.
+    hocket::Player::ReadyPtr incoming_;
+    std::vector<hocket::Player::ReadyPtr> retired_;
+    bool incomingLive_ = false;             // under swap_: the waiting song differs from the playing one in live values only
+    int incomingVersion_ = 0;               // under swap_
+    std::int64_t incomingBar_ = 3840;       // under swap_: the waiting song's bar, in ticks, and its meter
+    int incomingMeter_ = 0;
+    std::atomic<int> playingVersion_{0};    // the handover the audio thread last took
+    // The message thread's: the songs it handed over, by their live key (the song's JSON with every live value
+    // neutral, §9.3): the one known to be playing, and the one waiting.
+    struct Handed {
+        int version = 0;
+        juce::String key;
+    };
+    Handed played_, pending_;
+    int handVersion_ = 0;
 
     std::atomic<int> output_{static_cast<int>(Output::Host)};
     juce::String portName_;

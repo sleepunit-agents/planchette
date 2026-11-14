@@ -143,6 +143,21 @@ public:
     // are the new song's. The plugin calls it on a bar line.
     void setSong(const Song& song);
 
+    // §9.3: a song made ready to play, off the audio thread. Working out a song's state at a bar is a replay from
+    // bar 0 (§2.1), which grows with the bar; `ready` does it for `bar` (under Freeze held from `hold`, −1 for
+    // none), so that taking the song costs the audio thread a swap.
+    struct Ready;
+    struct ReadyDelete {
+        void operator()(Ready* r) const;
+    };
+    using ReadyPtr = std::unique_ptr<Ready, ReadyDelete>;
+    static ReadyPtr ready(const Song& song, std::int64_t bar, std::int64_t hold = -1);
+    // Takes a ready song from here on, and gives back the one it replaces (to be freed off the audio thread).
+    // `live` (§9.3, a change of live values only, taken mid-bar): a step that has begun still plays what it had
+    // left, its late note and its ratchet's repeats; steps from here on are the new song's. Otherwise as setSong,
+    // on a bar line. If Freeze's hold has changed since the song was made ready, its state is worked out here.
+    ReadyPtr take(ReadyPtr next, bool live);
+
     // Freeze (§9, §17.6), a live input. Asked for, it takes hold on the next bar line (bar 1 at the earliest): every
     // bar from there plays the state of the bar before it. Let go, the next bar line plays the replay's state there.
     // A jump or a Stop lets go of it and switches it off; takeReleased() says so once, so the button can follow.

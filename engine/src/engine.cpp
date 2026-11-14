@@ -1733,6 +1733,36 @@ struct Player::Impl {
     }
 };
 
+// §9.3: a song and its world, made off the audio thread, with the state at the bar it will be taken at worked out.
+struct Player::Ready {
+    std::unique_ptr<Song> song;
+    std::unique_ptr<Track> world;
+    std::int64_t hold = -1;
+};
+void Player::ReadyDelete::operator()(Ready* r) const { delete r; }
+
+Player::ReadyPtr Player::ready(const Song& song, std::int64_t bar, std::int64_t hold) {
+    ReadyPtr r(new Ready());
+    r->song = std::make_unique<Song>(song);
+    r->hold = hold >= 1 ? hold : -1;
+    r->world = std::make_unique<Track>(*r->song, r->hold);
+    // The replay runs to the bar here (and the bar's patterns are made), not on the audio thread.
+    const std::int64_t at = std::max<std::int64_t>(0, bar) * r->world->barTicks();
+    r->world->collect(at, at + 1);
+    return r;
+}
+
+Player::ReadyPtr Player::take(ReadyPtr next, bool live) {
+    if (!next) return next;
+    Impl& p = *impl_;
+    std::swap(p.song, next->song);
+    std::swap(p.world, next->world);
+    if (next->hold != p.hold) p.rebuild();  // Freeze took hold or let go meanwhile: its state under this hold, here
+    // Not live: the new song decides from here, as setSong. Live: what a step that has begun had still to play stays.
+    if (!live) p.later.clear();
+    return next;  // the song and world it replaced
+}
+
 Player::Player(const Song& song) : impl_(std::make_unique<Impl>(song)) {}
 Player::~Player() = default;
 

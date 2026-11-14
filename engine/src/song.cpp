@@ -85,6 +85,24 @@ Voice& addVoice(Song& s, Group& g, VoiceType type, int channel) {
     return g.voices.back();
 }
 
+void neutralLive(Song& s) {
+    s.range = s.wander = 8;
+    s.accent = 50, s.gatePercent = 100;
+    s.octaveLow = -1, s.octaveHigh = 2;
+    s.fill = 0;
+    for (Group& g : s.groups) {
+        g.density = 8, g.probability = 100, g.ratchet = 0;
+        g.fillNow = false, g.mute = false;
+        g.soloMember = 0;
+        g.overrides.range = g.overrides.wander = g.overrides.accent = g.overrides.gatePercent = std::nullopt;
+        for (Voice& v : g.voices) {
+            v.density = v.weight = 8;
+            v.mute = false;
+            v.overrides = Overrides();
+        }
+    }
+}
+
 void assignSlots(Song& s) {
     bool group[kGroupSlots + 1] = {}, voice[kVoiceSlots + 1] = {};
     for (const Group& g : s.groups) {
