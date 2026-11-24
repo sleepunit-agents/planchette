@@ -106,6 +106,10 @@ const char* paramName(Param p) {
         case Param::HumanTiming: return "timing feel";
         case Param::Handoff: return "handoff";
         case Param::CleanHandoffs: return "clean handoffs";
+        case Param::Stagger: return "stagger";
+        case Param::StaggerOrder: return "stagger order";
+        case Param::StaggerLean: return "stagger lean";
+        case Param::Top: return "top";
         default: return "setting";
     }
 }
@@ -286,7 +290,8 @@ std::vector<Param> paramsFor(Scope sc) {
                                    Param::GatePercent, Param::SoloMember, Param::DealMode, Param::Direction, Param::Probability, Param::Ratchet,
                                    Param::Repeats, Param::Fill, Param::Handoff, Param::CleanHandoffs};
         case Scope::Voice: return {Param::Range, Param::Wander, Param::Weight, Param::Density, Param::Accent, Param::GatePercent, Param::Voicing, Param::ChordSize, Param::OctaveLow,
-                                   Param::OctaveHigh, Param::Articulation, Param::VoiceLeading, Param::HumanVelocity, Param::HumanTiming};
+                                   Param::OctaveHigh, Param::Articulation, Param::VoiceLeading, Param::HumanVelocity, Param::HumanTiming,
+                                   Param::Stagger, Param::StaggerOrder, Param::StaggerLean, Param::Top};
     }
     return {};
 }
@@ -304,6 +309,8 @@ juce::StringArray pickOptions(const Song& s, const Row& r) {
         case Param::ChangesEvery: return {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars"};
         case Param::Fill: case Param::ModeMoves: case Param::CleanHandoffs: return {"Off", "On"};
         case Param::VoiceLeading: return {"Fixed", "Nearest"};
+        case Param::StaggerOrder: return {"Up", "Down", "Seeded"};  // §3.4b
+        case Param::StaggerLean: return {"Late", "Around"};
         case Param::SoloMember: {
             juce::StringArray o;
             if (const Group* g = groupOf(s, r.target))
@@ -802,14 +809,15 @@ public:
 private:
     static std::pair<int, int> spanOf(Param p) {
         switch (p) {
-            case Param::Accent: case Param::Swing: case Param::Probability: case Param::Ratchet: return {0, 100};
+            case Param::Accent: case Param::Swing: case Param::Probability: case Param::Ratchet: case Param::HumanTiming: return {0, 100};
+            case Param::HumanVelocity: return {0, 32};
             case Param::Handoff: return {0, 50};
             case Param::Repeats: return {2, 4};
             case Param::GatePercent: return {1, 200};
             case Param::OctaveLow: case Param::OctaveHigh: return {-1, 2};
             case Param::Steps: return {1, 64};
             case Param::Offset: return {0, 63};
-            case Param::Weight: return {0, 16};
+            case Param::Weight: case Param::Stagger: case Param::Top: return {0, 16};
             case Param::ChordSize: return {1, 6};
             default: return {1, 16};
         }
@@ -1639,7 +1647,7 @@ private:
             case Param::OctaveLow: case Param::OctaveHigh: return {-1, 2};
             case Param::Steps: return {1, 64};
             case Param::Offset: return {0, 63};
-            case Param::Weight: return {0, 16};
+            case Param::Weight: case Param::Stagger: case Param::Top: return {0, 16};
             case Param::ChordSize: return {1, 6};
             default: return {1, 16};
         }

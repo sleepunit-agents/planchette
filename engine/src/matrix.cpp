@@ -53,6 +53,9 @@ std::pair<int, int> spanOf(const Song& s, Scope scope, std::uint64_t target, Par
         case Param::HumanVelocity: return {0, 32};
         case Param::HumanTiming: return {0, 100};
         case Param::Handoff: return {0, 50};
+        case Param::Stagger: case Param::Top: return {0, 16};
+        case Param::StaggerOrder: return {0, 2};
+        case Param::StaggerLean: return {0, 1};
         case Param::Fill: case Param::ModeMoves: case Param::VoiceLeading: case Param::CleanHandoffs: return {0, 1};
         case Param::SoloMember: {
             const Group* g = scope == Scope::Group ? groupById(s, target) : nullptr;
@@ -138,6 +141,10 @@ std::optional<int> get(const Song& s, Scope scope, std::uint64_t target, Param p
                 case Param::VoiceLeading: return v->nearest ? 1 : 0;
                 case Param::HumanVelocity: return v->humanVelocity;
                 case Param::HumanTiming: return v->humanTiming;
+                case Param::Stagger: return v->stagger;
+                case Param::StaggerOrder: return static_cast<int>(v->staggerOrder);
+                case Param::StaggerLean: return static_cast<int>(v->staggerLean);
+                case Param::Top: return v->top;
                 default: return std::nullopt;
             }
         }
@@ -214,6 +221,10 @@ void set(Song& s, Scope scope, std::uint64_t target, Param p, int x) {
                 case Param::VoiceLeading: v->nearest = x != 0; break;
                 case Param::HumanVelocity: v->humanVelocity = x; break;
                 case Param::HumanTiming: v->humanTiming = x; break;
+                case Param::Stagger: v->stagger = x; break;
+                case Param::StaggerOrder: v->staggerOrder = static_cast<StaggerOrder>(x); break;
+                case Param::StaggerLean: v->staggerLean = static_cast<StaggerLean>(x); break;
+                case Param::Top: v->top = x; break;
                 default: break;
             }
             break;
@@ -416,7 +427,8 @@ constexpr const char* kParamKeys[] = {
     "range", "wander", "accent", "gatePercent", "octaveLow", "octaveHigh", "density", "steps", "swing", "offset", "weight", "voicing",
     "chordSize", "length", "root", "scale", "soloMember", "deal", "direction", "articulation", "changesEvery", "reroll.rhythm",
     "reroll.pitch", "reroll.deal", "reroll.all", "vary.pitch", "vary.rhythm", "probability", "ratchet", "repeats", "fill", "modeMoves",
-    "nearest", "humanVelocity", "humanTiming", "handoff", "cleanHandoffs"};
+    "nearest", "humanVelocity", "humanTiming", "handoff", "cleanHandoffs",
+    "stagger", "staggerOrder", "staggerLean", "top"};
 static_assert(sizeof(kParamKeys) / sizeof(kParamKeys[0]) == static_cast<int>(kLastParam) + 1, "a key for every param");
 }  // namespace
 

@@ -37,17 +37,20 @@ enum class Param {
     Handoff,
     // §5.7, appended: pick-one (Off / On), of a group
     CleanHandoffs,
+    // §3.4b, appended: numeric, pick-one (Up / Down / Seeded), pick-one (Late / Around), numeric, of a Chord voice
+    Stagger, StaggerOrder, StaggerLean, Top,
 };
 // The last param there is: new ones go after it, and this moves with them.
-constexpr Param kLastParam = Param::CleanHandoffs;
+constexpr Param kLastParam = Param::Top;
 
 // What kind of target a row's param is (§7.2).
 inline bool isNumericParam(Param p) {
     return p <= Param::Length || (p >= Param::Probability && p <= Param::Repeats) || p == Param::HumanVelocity || p == Param::HumanTiming ||
-           p == Param::Handoff;
+           p == Param::Handoff || p == Param::Stagger || p == Param::Top;
 }
 inline bool isPickParam(Param p) { return (p >= Param::SoloMember && p <= Param::ChangesEvery) || p == Param::Fill || p == Param::ModeMoves ||
-                                     p == Param::VoiceLeading || p == Param::CleanHandoffs; }
+                                     p == Param::VoiceLeading || p == Param::CleanHandoffs ||
+                                     p == Param::StaggerOrder || p == Param::StaggerLean; }
 
 // §17.2: every destination's key. The params above by their number; a generator's parameter as slot.generator.key
 // ("rhythm.euclid.pulses", "notes.register.lock"), which has no number.

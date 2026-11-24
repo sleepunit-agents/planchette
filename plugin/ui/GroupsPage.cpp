@@ -216,7 +216,9 @@ public:
           size_("Chord size", 1, 6, 4, colour::voice(index)), voicing_("Voicing", 1, 16, 1, colour::voice(index)),
           feelVelocity_("Feel: velocity", 0, 32, 0, colour::voice(index)), feelTiming_("Feel: timing", 0, 100, 0, colour::voice(index)),
           accent_("Accent", 0, 100, 50, colour::voice(index)), gate_("Gate", 1, 200, 100, colour::voice(index)),
-          articulation_({"Sustain", "Restrike accents", "Restrike hits", "Pulse"}), notesGen_(generatorLabels(SlotKind::Notes)),
+          stagger_("Stagger", 0, 16, 0, colour::voice(index)), top_("Top", 0, 16, 0, colour::voice(index)),
+          articulation_({"Sustain", "Restrike accents", "Restrike hits", "Pulse"}), staggerOrder_({"Up", "Down", "Seeded"}),
+          staggerLean_({"Late", "Around"}), notesGen_(generatorLabels(SlotKind::Notes)),
           notesKnobs_(*this, colour::voice(index), 3) {
         addAndMakeVisible(notesGen_);
         notesGen_.setOff(colour::panel);
@@ -227,9 +229,9 @@ public:
             const auto all = generatorsFor(SlotKind::Notes);
             if (i >= 0 && i < static_cast<int>(all.size())) change([name = std::string(all[static_cast<std::size_t>(i)]->name)](Voice& v) { v.notesGen.use = name; });
         };
-        for (juce::Component* c : std::initializer_list<juce::Component*>{&type_, &channel_, &octave_, &weight_, &tie_, &lock_, &reroll_, &remove_, &size_, &voicing_, &nearest_, &articulation_, &feelVelocity_, &feelTiming_})
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&type_, &channel_, &octave_, &weight_, &tie_, &lock_, &reroll_, &remove_, &size_, &voicing_, &nearest_, &articulation_, &feelVelocity_, &feelTiming_, &staggerOrder_, &staggerLean_})
             addAndMakeVisible(c);
-        for (ValueBar* b : {&channel_, &octave_, &weight_, &size_, &voicing_, &feelVelocity_, &feelTiming_, &accent_, &gate_}) {
+        for (ValueBar* b : {&channel_, &octave_, &weight_, &size_, &voicing_, &feelVelocity_, &feelTiming_, &accent_, &gate_, &stagger_, &top_}) {
             addAndMakeVisible(b);
             b->setLayout(ValueBar::Layout::Inline);
             b->setTrack(colour::panel);
@@ -251,6 +253,16 @@ public:
         own(gate_, &Overrides::gatePercent);
         type_.setOff(colour::panel);
         articulation_.setOff(colour::panel);
+        // §3.4b: a hand, not a block. Stagger spreads the notes a chord strikes (up to a 1/16 note at 16) in its Order,
+        // from the strike on or Around it; Top plays the top note louder and the inner notes softer.
+        staggerOrder_.setOff(colour::panel);
+        staggerLean_.setOff(colour::panel);
+        stagger_.format = [](int v) { return v == 0 ? juce::String("off") : juce::String(v); };
+        top_.format = [](int v) { return v == 0 ? juce::String("off") : "+" + juce::String(v); };
+        stagger_.onChange = [this](int x) { change([x](Voice& v) { v.stagger = x; }); };
+        top_.onChange = [this](int x) { change([x](Voice& v) { v.top = x; }); };
+        staggerOrder_.onChange = [this](int i) { change([i](Voice& v) { v.staggerOrder = static_cast<StaggerOrder>(i); }); };
+        staggerLean_.onChange = [this](int i) { change([i](Voice& v) { v.staggerLean = static_cast<StaggerLean>(i); }); };
         octave_.format = [](int v) { return v > 0 ? "+" + juce::String(v) : juce::String(v); };
         // §4.7: humanize, off at 0. Velocity moves each note by up to ± this; timing lets each line note sound late by
         // up to this much of the room left in its step (a chord's notes move only in velocity).
@@ -295,6 +307,10 @@ public:
         feelVelocity_.setValue(v.humanVelocity);
         feelTiming_.setValue(v.humanTiming);
         articulation_.setSelected(static_cast<int>(v.articulation));
+        stagger_.setValue(v.stagger);
+        top_.setValue(v.top);
+        staggerOrder_.setSelected(static_cast<int>(v.staggerOrder));
+        staggerLean_.setSelected(static_cast<int>(v.staggerLean));
         tie_.setKind(v.tie ? Pill::Kind::Selected : Pill::Kind::Neutral);
         tie_.setButtonText(v.tie ? "Ties" : "Tie");
         lock_.setKind(v.lockNotes ? Pill::Kind::Selected : Pill::Kind::Neutral);
@@ -308,6 +324,7 @@ public:
         nearest_.setKind(v.nearest ? Pill::Kind::Selected : Pill::Kind::Neutral);
         nearest_.setButtonText(v.nearest ? "Nearest: on" : "Nearest");
         articulation_.setVisible(chord);
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&stagger_, &top_, &staggerOrder_, &staggerLean_}) c->setVisible(chord);
         chord_ = chord;
         // A line's Notes slot (§16.10); a chord voices the harmony and has none (§16.1).
         notesGen_.setVisible(!chord);
@@ -325,7 +342,7 @@ public:
         resized();  // a swap can change how many knobs the row has
         repaint();
     }
-    int heightNeeded() const { return chord_ ? 296 : 292; }
+    int heightNeeded() const { return chord_ ? 352 : 292; }
     void paint(juce::Graphics& g) override {
         g.setColour(colour::raised);
         g.fillRoundedRectangle(getLocalBounds().toFloat(), 14.0f);
@@ -401,6 +418,15 @@ public:
             low.removeFromRight(6);
             size_.setBounds(low.removeFromLeft(low.getWidth() / 2).reduced(6, 4));
             voicing_.setBounds(low.reduced(6, 4));
+            r.removeFromTop(8);
+            auto hand = r.removeFromTop(48);  // Stagger and Top (§3.4b)
+            hand.removeFromLeft(30);
+            staggerLean_.setBounds(hand.removeFromRight(200).withSizeKeepingCentre(200, 44));
+            hand.removeFromRight(6);
+            staggerOrder_.setBounds(hand.removeFromRight(270).withSizeKeepingCentre(270, 44));
+            hand.removeFromRight(6);
+            stagger_.setBounds(hand.removeFromLeft(hand.getWidth() / 2).reduced(6, 4));
+            top_.setBounds(hand.reduced(6, 4));
         }
     }
 
@@ -416,10 +442,10 @@ private:
     bool chord_ = false;
     bool fromVoices_ = false;  // §5.8: the group's Density from voices: the Weight bar is the voice's Density
     Segmented type_;
-    ValueBar channel_, octave_, weight_, size_, voicing_, feelVelocity_, feelTiming_, accent_, gate_;
+    ValueBar channel_, octave_, weight_, size_, voicing_, feelVelocity_, feelTiming_, accent_, gate_, stagger_, top_;
     juce::String slot_;
     juce::Rectangle<int> slotArea_;
-    Segmented articulation_;
+    Segmented articulation_, staggerOrder_, staggerLean_;
     Segmented notesGen_;
     GenKnobs notesKnobs_;
     juce::String why_;
