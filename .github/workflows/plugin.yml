@@ -1,8 +1,11 @@
 name: plugin
-# Linux and Windows build on GitHub-hosted runners; macOS is optional (repository variable HOCKET_HOSTED=true).
+# Linux and Windows build on every run. macOS builds on pushes (main and version tags), so every release has it;
+# on pull requests it's optional (repository variable HOCKET_HOSTED=true).
+# Pushes publish downloads: main moves the rolling "nightly" pre-release, a vX.Y.Z tag cuts a release (see README).
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 jobs:
   build:
@@ -12,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, windows, macos-latest]
-        exclude: ${{ fromJSON(vars.HOCKET_HOSTED == 'true' && '[]' || '[{"os":"macos-latest"}]') }}
+        exclude: ${{ fromJSON((vars.HOCKET_HOSTED == 'true' || github.event_name == 'push') && '[]' || '[{"os":"macos-latest"}]') }}
     name: build (${{ matrix.os }})
     defaults:
       run:
@@ -87,7 +90,72 @@ jobs:
           mkdir -p dist
           cp -R "${{ steps.paths.outputs.vst3 }}" dist/
           if [ "$RUNNER_OS" = macOS ]; then cp -R "$(find build -type d -name 'Planchette.component' | head -1)" dist/; fi
+          version=$(sed -n 's/^project(planchette VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          printf 'Planchette %s\ncommit %s (%s)\nbuilt %s on %s\n' "$version" "$GITHUB_SHA" "$GITHUB_REF_NAME" \
+            "$(date -u +%Y-%m-%dT%H:%MZ)" "$RUNNER_OS" > dist/BUILD.txt
+          # Zip here, not in upload-artifact: an artifact drops file permissions, and a Mac bundle needs its exec bit.
+          cd dist && cmake -E tar cf "../Planchette-$RUNNER_OS.zip" --format=zip -- *
       - uses: actions/upload-artifact@v4
         with:
           name: Planchette-${{ runner.os }}
-          path: dist/
+          path: Planchette-${{ runner.os }}.zip
+
+  publish:
+    # Whatever platforms passed get published; a platform that failed is left out rather than holding the rest back.
+    needs: build
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Planchette-*
+          path: out
+          merge-multiple: true
+      - name: Anything to publish?
+        run: |
+          ls -la out
+          ls out/Planchette-*.zip >/dev/null 2>&1 || { echo "::error::No platform built, nothing to publish"; exit 1; }
+      - name: Cut a release (vX.Y.Z tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^project(planchette VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            "v$version"|"v$version"-*) ;;
+            *) echo "::error::Tag $tag doesn't match CMakeLists.txt's VERSION $version: bump it first"; exit 1 ;;
+          esac
+          pre=""; case "$tag" in *-*) pre="--prerelease" ;; esac   # v0.2.0-rc1 and friends are pre-releases
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" out/Planchette-*.zip --clobber
+          else
+            gh release create "$tag" out/Planchette-*.zip --verify-tag --title "Planchette $tag" --generate-notes $pre
+          fi
+      - name: Roll the nightly (main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # An older run finishing late mustn't roll the nightly back.
+          head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$head" != "$GITHUB_SHA" ]; then echo "main has moved on to $head; leaving the nightly to that run"; exit 0; fi
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin refs/tags/nightly
+          notes="Rolling build of \`main\` at ${GITHUB_SHA:0:7}: $(git log -1 --format=%s)
+
+          Built and validated (pluginval, host test) $(date -u '+%Y-%m-%d %H:%M UTC'). Each zip has a BUILD.txt naming its commit.
+          For a cut version, take the latest release instead."
+          if gh release view nightly >/dev/null 2>&1; then
+            # Clear the old zips so a platform that failed this time doesn't leave a stale one behind.
+            for a in $(gh release view nightly --json assets --jq '.assets[].name'); do gh release delete-asset nightly "$a" --yes; done
+            gh release edit nightly --prerelease --latest=false --title "Planchette nightly" --notes "$notes"
+            gh release upload nightly out/Planchette-*.zip --clobber
+          else
+            gh release create nightly out/Planchette-*.zip --prerelease --latest=false --title "Planchette nightly" --notes "$notes"
+          fi

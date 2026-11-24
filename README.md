@@ -26,11 +26,18 @@ AUv3 on iPad (AUM, Loopy Pro, Drambo) and VST3 / AU in Ableton Live, from one co
 
 ## Try it in Live
 
-Each push builds the plugin on Mac (universal: Apple silicon and Intel), Windows and Linux. The **plugin** workflow
-validates each build with pluginval and the host test, then keeps it as a download: open the workflow run on GitHub
-and grab `Planchette-macOS` or `Planchette-Windows`.
+Download a build. No GitHub sign-in needed:
 
-1. Put `Planchette.vst3` in your VST3 folder (Mac `~/Library/Audio/Plug-Ins/VST3/`, Windows
+| | Latest release | Nightly (newest `main`) |
+|---|---|---|
+| Windows | [Planchette-Windows.zip](https://github.com/sleepunit-agents/planchette/releases/latest/download/Planchette-Windows.zip) | [Planchette-Windows.zip](https://github.com/sleepunit-agents/planchette/releases/download/nightly/Planchette-Windows.zip) |
+| Mac (Apple silicon + Intel) | [Planchette-macOS.zip](https://github.com/sleepunit-agents/planchette/releases/latest/download/Planchette-macOS.zip) | [Planchette-macOS.zip](https://github.com/sleepunit-agents/planchette/releases/download/nightly/Planchette-macOS.zip) |
+| Linux | [Planchette-Linux.zip](https://github.com/sleepunit-agents/planchette/releases/latest/download/Planchette-Linux.zip) | [Planchette-Linux.zip](https://github.com/sleepunit-agents/planchette/releases/download/nightly/Planchette-Linux.zip) |
+
+Every build is validated with pluginval and the host test before it's published. Each zip has a `BUILD.txt` naming its
+version and commit. All releases: [Releases](https://github.com/sleepunit-agents/planchette/releases).
+
+1. Unzip, then put `Planchette.vst3` in your VST3 folder (Mac `~/Library/Audio/Plug-Ins/VST3/`, Windows
    `C:\Program Files\Common Files\VST3\`). On a Mac the download is unsigned: run
    `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Planchette.vst3` once, or macOS won't load it.
 2. In Live, put Planchette on a MIDI track as an instrument. It makes no sound; it makes MIDI.
@@ -82,6 +89,19 @@ fills) changes a song: each Generate with one knob on, against itself with it of
 
 A golden file only changes on purpose: `HOCKET_UPDATE_GOLDEN=1 ./build/planchette_tests` rewrites it, and a change to it
 means every song changed (SPEC §2.4: bump `kEngineVersion`, keep the old path).
+
+## Releases
+
+Every push to `main` rebuilds the **nightly** pre-release in place: same tag, same download links, newest zips. It never
+counts as "latest", so the latest-release links only ever point at a cut version.
+
+To cut a version:
+
+1. Bump `VERSION` in the top-level `CMakeLists.txt` (`project(planchette VERSION 0.2.0 ...)`) and merge it to `main`.
+2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The plugin workflow builds the tag on all three platforms and publishes a release with generated notes. It refuses a
+tag that doesn't match `CMakeLists.txt`. A tag with a suffix (`v0.2.0-rc1`) becomes a pre-release.
 
 ## Licence, third-party components and trademarks
 
