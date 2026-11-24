@@ -408,6 +408,121 @@ each change  of the chord's inversions, the closest to the chord before:
 **In the change matrix**, Voice leading is a pick-one target of a Chord voice (Fixed / Nearest). This section adds to
 the lists in §7.2 and §10; it's kept in one place here.
 
+### 3.4b Stagger and Top: a hand, not a block
+
+A chord struck all at once, every note on the same tick at the same velocity, is a machine's chord. A pianist's hand
+puts the notes down a little apart, and in a progression it moves the voices that move and leaves the ones that stay.
+It also plays the top of the chord louder than the inside. **Stagger** spreads the notes a chord strikes over a short
+time, in an order. **Top** brings the chord's top note forward and the inner notes back. Both are per Chord voice and
+off by default.
+
+| Setting (per Chord voice) | Key | Range | Default |
+|---|---|---|---|
+| Stagger | `stagger` | 0–16 | 0 (off) |
+| Order | `staggerOrder` | Up (lowest first), Down (highest first), Seeded | Up |
+| Lean | `staggerLean` | Late (from the strike on), Around (half before it, half after) | Late |
+| Top | `top` | 0–16 | 0 (off) |
+
+Stagger is the chord's own timing. Feel: timing (§4.7) still leaves chords alone, so the notes they share still tie.
+
+#### Stagger
+
+**Which notes.** Only the notes that start at a strike. At a change (Sustain, §4.5), a note both chords share is held
+and doesn't move; only the notes that move are spread. At a fresh strike (the start of a pass, a restrike, a Pulse
+hit) every note starts, so every note is spread: a roll.
+
+```
+spread   = (240 · Stagger) div 16                      // up to a 1/16 note at 16, whatever the tempo
+for each neighbour at distance d < 2 · spread:         // this voice's strikes before and after it, and the edges of
+    spread = min(spread, d div 2)                      // the section it's in (§18.1); never halfway to one
+m        = the notes starting here, ordered by Order:
+             Up: lowest first;  Down: highest first;
+             Seeded: priority order (§2.5) from hash(masterSeed, "stagger", voiceID, strike), over the notes from
+             the lowest, keeping places < m
+offset_i = (m ≥ 2) ? spread · i div (m − 1) : 0        // i = 0 … m − 1
+Around:    offset_i −= spread div 2                    // at the song's or a section's start, Around plays as Late
+start_i  = strike + offset_i
+```
+
+`strike` is the tick the chord is struck from: its change (or, under Push, its arrival, §4.8), a pass's start, or the
+restrike's or Pulse hit's sounding tick. A voice's strikes are those that sound: a restrike or a Pulse hit that
+Probability drops (§4.6) isn't one, and a muted voice has none. A Pulse hit's ratchet repeats (§4.6) are spread the same
+way, at the same offsets, and they're neighbours: a ratcheted hit's spread fits between its repeats. The look-ahead is bounded: only a neighbour
+within 2 · spread (at most 480 ticks) matters.
+
+**Where a moving note lets go.** When as many notes leave at a strike as arrive (always, at a change between two chords
+of one size), they pair up in pitch order: the lowest leaving note with the lowest arriving one, and so on up. A
+leaving note ends when its partner starts, so each voice moves on its own, legato. Otherwise every leaving note ends at
+the strike's first start (`strike + min offset`), so nothing overlaps the new chord for long. Either way a note ends no
+later than its own pitch starts again (§11's rule, said here so the timing is the spec's, not the MIDI layer's).
+
+A Pulse note keeps its length: it ends at its own start plus the hit's gate, as it does today, moved by its offset.
+
+- **Its own stream.** The Seeded order is drawn from the master seed and the voice's ID, as Feel is (§4.7), not from the
+  pitch seed. A new Generate or Lock notes keeps the hand; only the chords change. Up and Down draw nothing.
+- **Deterministic.** Everything is a function of the strike's tick, the voice and the song. A jump replays it.
+- **Nested.** Stagger scales the offsets: turning it up moves each note further the same way, and the order doesn't
+  change. At 0 nothing is drawn, so a song from before it plays as it did, bit for bit, and `kEngineVersion` stays.
+- **It never crosses a strike.** The offsets stay inside half the gap to the strikes on either side, so the notes of
+  one strike are all down before the next strike's first note. That holds for the strikes replay can know: a live
+  change (§9.3) that adds a hit inside a spread already under way (a Restrike hits voice's group turning its Density
+  up) can land among its notes.
+- **Jumps.** A jump (§6.3) lands among a chord's spread notes as it would on any tick: the notes that have started
+  sound, and the rest start at their own ticks.
+- **Edges.** A section's start and end are neighbours, so nothing spreads across one (§18.1). At the song's or a
+  section's start, Around plays as Late, so the roll keeps its shape rather than bunching against the edge.
+- **With Push (§4.8)** the strike is the change's arrival: the moving voices spread around the riff's hit.
+- **Velocity** is each note's own, with Top below, then Feel: velocity (§4.7), as before.
+
+#### Top
+
+```
+n        = the chord's notes as struck, ascending (the whole chord, held notes included)
+v_note   = v + Top              for n's highest note
+           v                    for n's lowest note
+           v − Top div 2        for every note between
+         (a chord of one note: v)
+v_note   = clamp(v_note, 1, 127)
+```
+
+`v` is the velocity §4.5 gives the strike (a sustained chord's normal velocity, a restrike's or Pulse hit's own).
+`v_note` then goes through Feel: velocity (§4.7). (It's clamped here because Feel at 0 passes a velocity through
+untouched: an accented restrike at 113 with Top 16 would otherwise send 129.) A note held through a change keeps the
+velocity it was struck with, so at a change Top shapes only the notes that move: when the new top note is a held one,
+the chord's loudest note may be a new inner one. That's the price of a tie, and a fresh strike (a pass's start, a
+restrike) balances the whole chord again. Top draws nothing, so it's exact: the same value plays the same chord on every replay, and a matrix move on it adds to
+the same value. At 0 a song plays as it did, bit for bit.
+
+The lowest note stays at `v` because the bass of a chord is the other voice a listener follows; only the inside steps
+back. Top is per Chord voice, so a pad and a stab can be balanced apart.
+
+#### Worked values
+
+`python3 tools/spec_arith.py`, "§3.4b Stagger" and "§3.4b Top": C major, a Chord voice at its default base (MIDI 48),
+size 4, Voicing 1, Sustain, changes every bar (3840 ticks).
+
+```
+Cmaj7  C3 E3 G3 B3
+→ G7   D3 F3 G3 B3     holds G3 B3   moves C3→D3, E3→F3
+         Stagger 8  (spread 120), Up, Late:   D3 +0    F3 +120          C3 ends +0,  E3 ends +120
+                                  Around:     D3 −60   F3 +60           C3 ends −60, E3 ends +60
+         Stagger 16 (spread 240), Up, Late:   D3 +0    F3 +240
+→ Am7  C3 E3 G3 A3     holds G3      moves D3→C3, F3→E3, B3→A3
+         Stagger 8,  Up, Late:    C3 +0    E3 +60   A3 +120
+         Stagger 8,  Up, Around:  C3 −60   E3 +0    A3 +60
+A fresh strike of Cmaj7, Stagger 8:   Up C3 +0 E3 +40 G3 +80 B3 +120;   Down B3 +0 G3 +40 E3 +80 C3 +120
+Restrike hits every 1/16 (gap 240), Stagger 16: the spread is held to 120, C3 +0 E3 +40 G3 +80 B3 +120
+Top on Cmaj7 at velocity 100:   Top 8   C3 100  E3 96  G3 96  B3 108;   Top 16   C3 100  E3 92  G3 92  B3 116
+```
+
+So at Stagger 8 on Up the bass voice of the chord moves on the change, and the voices above it follow it within a
+1/32 note: a hand, not a block.
+
+**In the change matrix**, Stagger and Top are numeric targets of a Chord voice, and Order and Lean are pick-one targets.
+"Chords · Stagger · ±4 · every 3 phrases" loosens and tightens the hand; "Chords · Top · ±4 · every 2 phrases" brings
+the top line forward and back. They're addressed by key (§17.2) and none moves a clock, so a level cord may drive
+Stagger and Top too. This section adds to the lists in §7.2 and §10; it's kept in one place here.
+
 ### 3.5 Octave jumps (Lead, Bass)
 
 Each voice has an octave lane: −1, 0, +1 or +2 per slot. Two rolls per slot, a and b, each in 0…99:
@@ -635,7 +750,7 @@ group's steps) and its own settings:
 
 ```
 changeTicks  = barTicks · [1/4, 1/2, 1, 2, 4][changesEvery]       // barTicks = 960 · bar length
-change       = tick div changeTicks
+change       = (tick − harmonyAnchor) div changeTicks
 k            = change % Length
 index        = note array (§3.3) from hash(harmony.seed, "progression"), L = Length, with the harmony's Range and Wander,
                except that slot 0 is moved to the front of the order: change 0 is always the tonic,
@@ -644,6 +759,12 @@ index        = note array (§3.3) from hash(harmony.seed, "progression"), L = Le
 currentChordRoot = harmonyRanked(song)[index[k]]                   // from a pool of the harmony's Range
 ```
 
+- **The harmony's anchor.** `harmonyAnchor` is the tick of the bar line where the harmony's Changes every or Length
+  last changed through the matrix (or a cord's trigger, §17.3), or 0. A section (§18.1) starts its letter's harmony
+  from its own bar 0, so a section's start is an anchor too. That's what the engine does and what replay can know. A
+  hand-made or host change to either is a new song from the next bar line, played as that song places its changes; it
+  doesn't re-anchor there (§15). A **pass**
+  through the progression is `Length` changes from the anchor: a pass starts where `change mod Length = 0`.
 - A progression always starts at home: change 0 is the tonic, whatever the seed. Wander decides how far the rest go.
 - Which chords of the pool a progression uses is the seed's (Q). Without Q, every seed took the pool's first chords
   in turn: 2000 Generates of one setup played the same three chords in six orders (`planchette_variance`).
@@ -800,12 +921,186 @@ room      = nominal + stepTicks − tick                         // from where t
 - **Scaled, not re-rolled.** The draws don't depend on the knob, so turning it up moves each note further the same way.
 - **Ratchets and chords move only in velocity.** A ratchet (§4.6) already fills its step; its repeats all move by the
   step's one velocity draw, which keeps their Ramp. A Chord voice's notes, sustained, restruck or Pulse, keep their
-  times so common tones still tie (§4.5), and each chord note gets its own velocity draw.
+  times so common tones still tie (§4.5), and each chord note gets its own velocity draw. A chord's own timing is
+  Stagger (§3.4b).
 - At 0 nothing is drawn: a song from before this section plays as it did, bit for bit, and `kEngineVersion` stays.
 
 **In the change matrix**, Feel: velocity and Feel: timing are numeric targets of a voice. For example, "Leads · Feel:
 timing · ±30 · every 4 phrases · reverts after 1 phrase" loosens the feel in a turnaround. This section adds to the
 lists in §7.2 and §10; it's kept in one place here.
+
+### 4.8 Push: chords that serve the riff
+
+The harmony changes on its grid (§4.5): on the bar line, or on a quarter of one. However the lines move above it, the
+chords land on the 1, every time. In a song built around a riff, the chords should go where the riff goes: when the
+riff pushes into the bar, the chord pushes with it; when the riff comes in after the 1, the chord waits for it.
+
+This matters more than it looks. Where the chords change is the strongest single cue to where a listener hears the bar
+start (Dawe, Platt & Racine 1993): a change always on the 1 nails the bar down under any amount of syncopation above
+it. And the syncopation of the music Planchette is near is mostly *anticipation*, a note on the weak position just
+before a beat, with nothing on the beat (Tan, Lustig & Temperley 2019, Music Perception 36(4)).
+
+**Push** gives each change of the harmony an **arrival**: the tick it is heard from, taken from a **source** group's
+rhythm. The grid itself doesn't move. Irama (§18.3), the gongs (§18.2), the matrix's bar lines and the form's sections
+all still read the grid, so nothing that counts changes is touched. (It isn't §16.8's Follow, the later harmony
+generator that takes its chords from outside. Push moves when the harmony's own chords are heard.)
+
+| Setting (harmony) | Key | Range | Default |
+|---|---|---|---|
+| Push source | `push.source` (song file only) | a group's id | none (off) |
+| Push amount | `pushAmount` | 0–16 | 16 |
+| Push early | `pushEarly` | 0–4 of the source's steps | 1 |
+| Push late | `pushLate` | 0–4 of the source's steps | 0 |
+| Push hits | `pushHits` | All, Accents | All |
+
+| Setting (per voice) | Key | Range | Default |
+|---|---|---|---|
+| On the grid | `onGrid` | Off, On | Off (the voice hears the push) |
+| Strike with (Chord voice) | `strikeWith` | Own hits, Source | Own hits |
+
+The song file keeps them in `harmony` as `"push": { "source": id, "amount": 16, "early": 1, "late": 0, "hits": 0 }`
+and on a voice as `onGrid` (a bool) and `strikeWith`, a choice as its place in its list from 0. A missing field is its default,
+so `formatVersion` stays 1.
+
+#### The arrival
+
+For change c, on grid tick G (§4.5: `G = harmonyAnchor + c · changeTicks`):
+
+```
+off       if Push has no live source, or G is the harmony's anchor (§4.5: the song's start, a section's start
+          (§18.1), or a bar where Changes every or Length moved), or
+             roll(hash(harmony.seed, "push", k)) ≥ (100 · Amount) div 16        // k = c mod Length, as §4.5's
+          → arrival = G
+st        = the source group's stepTicks in the bar G is in (§4.4, irama included, §18.3)
+swing     = Swing · st div 200                       // the source's, §4.4
+Dₑ        = G − the grid tick of the change before   // a whole change: G is never an anchor here
+Dₗ        = the next change's grid tick, or the harmony's next anchor if that's sooner, − G
+reachₑ    = max(0, (Dₑ div 2 − 1 − swing) div st)    // nothing sounds halfway to a neighbouring change, swung or not
+reachₗ    = max(0, (Dₗ div 2 − 1 − swing) div st)
+E, L      = min(Early, reachₑ), min(Late, reachₗ)
+counts(s) = the source group's step s plays (§4.6: a hit, and Probability lets it),
+            and, for Hits = Accents, it's accented (§4.1)
+on the 1  : a source step on grid tick G counts                       → arrival = its sounding tick
+early     : else the latest step with grid tick in [G − E·st, G) that counts      → arrival = its sounding tick
+late      : else the earliest step with grid tick in (G, G + L·st] that counts    → arrival = its sounding tick
+else      → arrival = G
+```
+
+The source's steps are read as §16.6 reads a source: on its own grid (`anchor + absStep · stepTicks`), before Jitter,
+so a source on another division or anchor works the same way. The windows are spans of ticks, and a step is in one if
+its own grid tick is, so a source that re-anchors or changes irama inside a window is read as it plays, each step on
+the grid it had; `st` only sizes the windows. Mute doesn't change what counts: Push reads the source's rhythm, not
+whether it's heard, so muting the riff doesn't move the chords. The arrival is the step's **sounding** tick, Swing
+included (§4.4), not Feel: timing (that's a voice's, §4.7), so the chord lands with the riff as it swings.
+
+- **Arrivals keep their order.** Every arrival sounds less than halfway to the change or anchor on either side,
+  Swing included, so the changes are heard in their order, a late arrival never reaches the next anchor, and the
+  harmony at a tick is always one change's. Taking the swing out of the reach is what makes that so: without it,
+  Swing 100 on a short change could carry a late arrival past the next change's early one. Measuring the late side to
+  the next anchor is what keeps a section's last chord when the section isn't a whole number of changes long (5 bars
+  of changes every 4).
+- **Only the riff's own anticipations.** A change is pushed only when the riff has nothing on the 1 and has a hit just
+  before it, the nearest one. That's the corpus study's anticipatory syncopation, applied to the source. A riff that
+  plays the 1 keeps the chord on the 1.
+- **Early first.** When the riff has a hit on both sides of the 1, the chord takes the one before it: anticipation is
+  the common case, and a late arrival is the fallback for a riff that comes in after the 1.
+- **Nested.** Amount's roll is per place in the progression (`k`), so turning Amount up only adds changes that push,
+  and the same places push on every pass. Widening Early or Late never takes a change off the riff, and a change that
+  pushed early keeps its hit. The one thing a wider Early can do is move a change that arrived late to a hit before
+  the 1 instead.
+- **Polymeter does the varying.** A riff whose Steps don't divide the change (12 steps against a bar of 16) meets the
+  grid at a different place on each change, so the same Push settings push one change, delay the next and leave a
+  third on the 1. A riff on a bar's own length gives the same arrival every bar: a riff and its chords, locked.
+- **A source that's live** is §16.6's rule: a group in the song, not one on Resultant (§16.6), whose hits depend on
+  the pitches Push moves. No source, or one that isn't live, is Push off. The editor says so beside the source ("not
+  live: Resultant") rather than leaving the knobs to do nothing.
+
+#### What reads the arrival
+
+The harmony at a tick is the chord of the last change whose **arrival** is at or before it. Everything that sounds
+reads that:
+
+- **Chord voices** (§3.4, §4.5). Sustain strikes and ties at the arrival; a Pulse hit plays the chord the arrival says;
+  a pass through the progression strikes fresh at its first change's arrival. Stagger (§3.4b) spreads from the arrival.
+- **Lines** (§3.2). A lead's note on the riff's push takes the new chord's notes, as an anticipation does. Kotekan's
+  Nyok cok (§16.6) looks ahead to the next change's arrival, not its grid tick.
+- **A voice on the grid** (`onGrid`) reads the harmony as §4.5 has it. That's the bass landing on the 1 under a push,
+  or a Chord voice holding the bar while the lines push.
+
+What counts changes still reads the grid: §3.4a's `change` for Nearest, the pass, the matrix, irama and the gongs.
+
+A change that arrives early plays its chord **as its own bar's state has it** (§17.4): the state of the bar G is in,
+replayed. So a matrix row, a form letter or a Vary that changes the chord at bar b changes the pushed chord in bar
+b − 1 too. What comes from bar b is the harmony: Root, Scale, Colour and the chord. A line's own settings (Range,
+Wander, octaves) and a Chord voice's (Chord size, Voicing, Stagger, Top) are those of the bar the note sounds in, as
+they are for any note.
+
+**A struck chord holds.** From its arrival to the next arrival, a change's chord is the one it was struck with. Nothing
+re-strikes at G: the push was the strike. That matters only when bar b's state turns out different from what the push
+read, which replay never does on its own; Freeze or an edit can (below).
+
+**Strike with: Source.** A Chord voice on Restrike accents or Restrike hits (§4.5) strikes on the source group's
+steps that play (its accented ones, for Restrike accents), not on hits dealt to it, at their sounding ticks. A Chord
+voice doesn't need to be dealt a hit to stab with the riff. On Pulse, Source plays the chord on the source's hits for
+their gate, likewise. The velocity and length are the source step's accent and gate class (§4.1, §4.2), played with
+the Chord voice's own Accent and Gate % (§4.3), one strike per step (a source's ratchets don't ratchet the chord). With
+no live source, it's Own hits. Strike with reads only the source, not Amount: a Chord voice
+can stab with the riff while the changes stay on the grid.
+
+#### Edge cases
+
+- **Jumps.** An arrival is a pure function of the song and the tick, so a jump lands where it always does. The chords
+  ringing at a jump (§6.3) look back one change further, since an early arrival can sound in the bar before its own.
+- **Sections and anchors** (§18.1). Nothing sounds across a section's edge, so a section's first change stays on its
+  grid: no push into a new letter, and no late arrival that would leave the last letter's chord sounding in it. The
+  same holds for the song's first change and the first change after the harmony re-anchors.
+- **Freeze** (§9.2). The arrival is worked out from what plays: under Freeze, the source's hits are the held bar's,
+  and the harmony's changes run on as always. Freeze pressed in bar b − 1 after a push there sounded holds bar b − 1's
+  state from b, which can differ from the bar-b state the push read; the struck chord holds to its next arrival anyway
+  (above). A press before the push is heard is read by it. Freeze is a live input (§2.1), so that's the line.
+- **Live changes** (§9.3). Push's settings change on bar lines. A change that arrives early is sounded from the state
+  its bar had when the push played: a knob or the host moving the harmony at bar b after the push in b − 1 was heard
+  can't take the push back. That's the determinism rule's own line: what comes from outside can be lost (§2.1). The
+  source's Density and Probability are live values (§9.3), so a turn of one can add or drop a push from the next step.
+- **Off.** With no source, nothing is drawn: every song from before it plays as it did, bit for bit, `kEngineVersion`
+  stays and the golden file is unchanged.
+
+#### Worked values
+
+`python3 tools/spec_arith.py`, "§4.8 Push": 4/4, chords every bar (3840 ticks), the source at 1/16, so reach is 7
+steps (at changes every 1/4 bar it's 1). The source is a 12-step riff with hits on slots 1, 5, 7 and 11, accents on 1
+and 7. Early 2, Late 1, Amount 16. The riff meets the bar line on slot 0, 4, 8, 0, … (12 against 16).
+
+```
+                         change    0      1      2      3      4      5      6
+riff slot at the grid             0      4      8      0      4      8      0
+Hits All:     arrival            +0   +240   −240   −240   +240   −240   −240      // late, push, push, late…
+Hits Accents: arrival            +0     +0   −240   +240     +0   −240   +240
+Hits All, Swing 50:              +0   +300   −180   −180   +300   −180   −180      // odd steps sound 60 late
+              (change 0 is the song's start: on the grid)
+```
+
+And the rules at their edges, each at change 1 of a 16-step riff:
+
+```
+hits 2, 14, 15;  Early 2                  → −240     the nearest hit before the 1, not the furthest
+hits 1, 13;      Late 1, Early 2          → +240     nothing early in reach: the late hit
+                 Late 1, Early 3          → −720     the wider window finds slot 13 first
+hits 0, 15;      Early 2                  → +0       the riff plays the 1
+```
+
+At an anchor's edge: a 5-bar section of changes every 4 bars, the source at 1/4 with a hit on beat 2, Late 4. The
+change at bar 4 is 1 bar from the next section's start, so its late reach is 1 step: it arrives on beat 2 (+960), and
+the section's last chord is still heard.
+
+Amount, harmony seed `0123456789abcdef`, Length 4: the rolls by `k` are 56, 68, 5, 68, so Amount 4 or 8 pushes only
+the third change of each pass, and Amount 12 (75) or more pushes them all.
+
+**In the change matrix**, Push amount, early and late are numeric targets of the harmony, and Push hits a pick-one; a
+voice's Harmony (Pushed / On the grid) and a Chord voice's Strike with are pick-one targets. None moves a clock, so a
+level cord may drive the numeric ones. "Harmony · Push amount · ±8 · every 4 phrases, last phrase · reverts after 1
+phrase" lets the chords loosen into the riff for a turnaround. Push amount is a host parameter (✓). This section adds
+to the lists in §7.2, §10 and §17.2; it's kept in one place here.
 
 ## 5. Groups: dealing hits to members
 
@@ -1662,6 +1957,19 @@ Measured over 1000 Generates × 256 bars: There and back's home phrases share 60
 - **Humanize.** Answered: §4.7.
 - **A line that ignores the harmony.** Answered: the Pedal Notes generator (§16.5) measures a line from the tonic.
 - **Voice leading.** Answered: §3.4a's Voicing "nearest".
+- **A push into the next section** (§4.8). A pickup into a new letter is the most musical place for a push, and §18.1
+  forbids it as written: nothing sounds across a section's edge. The likely answer is a per-section flag, off by
+  default, that lets the first change of a section arrive early (never late: a late arrival would leave the last
+  letter's chord ringing in the new one). The arrival would still be a pure function of the song.
+- **A change with no riff hit near it** (§4.8). Should it lean toward the metrically strong places, as the corpus's 1
+  and 3 are? Likely the Grammar harmony generator's job (§16.8), not Push's.
+- **Push from a voice** (§4.8). Push reads a group's rhythm, before the deal. Reading one Lead or Bass voice's notes
+  instead (one lead of several in a group, or a bass in another group) is later.
+- **Hand-made clock changes and the anchor.** §4.4 says a hand-made or host change to a group's Steps, Beat division,
+  Offset or Direction re-anchors at the next bar line. The engine re-anchors only on the matrix's changes, for groups
+  and the harmony alike (§4.5 says so for the harmony). Either the engine learns it or §4.4 says what it does.
+- **Stagger and Top on the host.** They aren't in §12.2's voice slots; adding them grows the fixed parameter list.
+  Wait to see whether they're played live.
 - **Default musical choices** (§13): root, scale, densities and channels are my picks. Revisit them after hearing them.
 
 ## 16. Generator slots
@@ -2386,7 +2694,9 @@ key, so a row and a cord name the same parameter the same way. A new destination
 At Harmony scope, `reroll.all` is Reroll Harmony and `vary.pitch` is Vary Harmony, as today's rows have them. `fill`
 at Global is the song's Fill, at a Group its Fill now (§4.6). `modeMoves` is the song's Mode moves (§3.8) and
 `nearest` a Chord voice's Voicing "nearest" (§3.4a); `humanVelocity` and `humanTiming` are a voice's Feel: velocity
-and Feel: timing (§4.7); `handoff` a group's Handoff (§5.5) and `cleanHandoffs` its Clean handoffs (§5.7). `deal` is the Deal mode setting (its song-file name);
+and Feel: timing (§4.7); `handoff` a group's Handoff (§5.5) and `cleanHandoffs` its Clean handoffs (§5.7). By key only (no `param` number):
+`stagger`, `staggerOrder`, `staggerLean` and `top` at a Chord voice (§3.4b); `pushAmount`, `pushEarly`, `pushLate` and
+`pushHits` at Harmony, and `onGrid` and `strikeWith` at a Voice (§4.8). `deal` is the Deal mode setting (its song-file name);
 the deal reroll is `reroll.deal`.
 
 The scope says at which level a value moves, as §7.3 does for rows: `range` at a Group moves that group's Range, and
