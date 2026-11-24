@@ -93,6 +93,84 @@ def priority(h, L=64):
     return [x for x in a if x < L]
 
 
+# ---- §3.4b Stagger and Top ----------------------------------------------------------------------------------------
+
+def chord(r, root, scale, size, base=48):
+    """§3.4, Voicing 1: the first `size` of ranked(r), folded into the octave above base, sorted."""
+    return sorted(base + (pc - base) % 12 for pc in ranked(r, root, scale)[:size])
+
+
+def stagger(strike, neighbours, starting, S, order="up", lean="late", h=None, at_start=False):
+    """§3.4b: each starting note's start tick. neighbours: the ticks of this voice's other strikes and of its section's
+    edges; at_start: the strike is on the song's or a section's start (Around plays as Late)."""
+    spread = (240 * S) // 16
+    for t in neighbours:
+        d = abs(t - strike)
+        if 0 < d < 2 * spread:
+            spread = min(spread, d // 2)
+    n = sorted(starting)
+    if order == "down":
+        n = n[::-1]
+    elif order == "seeded":
+        n = [n[i] for i in priority(h, len(n))]
+    m = len(n)
+    if at_start:
+        lean = "late"
+    return {x: strike + (spread * i // (m - 1) if m >= 2 else 0) - (spread // 2 if lean == "around" else 0)
+            for i, x in enumerate(n)}
+
+
+def let_go(strike, leaving, starts):
+    """§3.4b: when each leaving note ends. starts: the arriving notes' start ticks."""
+    a, d = sorted(starts), sorted(leaving)
+    if len(a) == len(d):
+        end = {x: starts[y] for x, y in zip(d, a)}
+    else:
+        end = {x: min(starts.values()) for x in d}
+    return {x: min(t, starts.get(x, t)) for x, t in end.items()}  # a pitch that starts again ends by then
+
+
+def top(notes, v, T):
+    """§3.4b Top: each note's velocity before Feel: velocity."""
+    n = sorted(notes)
+    if len(n) < 2:
+        return {x: v for x in n}
+    return {x: clamp(v + T if x == n[-1] else v if x == n[0] else v - T // 2, 1, 127) for x in n}
+
+
+# ---- §4.8 Push ----------------------------------------------------------------------------------------------------
+
+def push_arrival(G, prev, nxt, st, steps_at, E, L, swing=0, anchor=False):
+    """§4.8: the arrival of the change on grid tick G. prev: the change before's grid tick; nxt: the next change's grid
+    tick or the harmony's next anchor, whichever is sooner. steps_at(t0, t1): the source's (grid tick, absStep, counts)
+    with t0 <= grid tick <= t1, in order."""
+    if anchor:
+        return G
+    sw = swing * st // 200
+    E = min(E, max(0, ((G - prev) // 2 - 1 - sw) // st))
+    L = min(L, max(0, ((nxt - G) // 2 - 1 - sw) // st))
+    sound = lambda t, a: t + (sw if a % 2 else 0)
+    near = steps_at(G - E * st, G + L * st)
+    on = [(t, a) for t, a, c in near if t == G and c]
+    if on:
+        return sound(*on[0])
+    early = [(t, a) for t, a, c in near if t < G and c]
+    if early:
+        return sound(*early[-1])
+    late = [(t, a) for t, a, c in near if t > G and c]
+    return sound(*late[0]) if late else G
+
+
+def riff(steps, hits, accents=(), st=240, anchor=0, only_accents=False):
+    def steps_at(t0, t1):
+        out = []
+        for a in range(ceil_div(t0 - anchor, st), (t1 - anchor) // st + 1):
+            s = a % steps
+            out.append((anchor + a * st, a, s in hits and (not only_accents or s in accents)))
+        return out
+    return steps_at
+
+
 # ---- §16.4 rhythm generators --------------------------------------------------------------------------------------
 
 def euclid(L, pulses, rotation):
@@ -451,6 +529,72 @@ def main():
     print('hash(seed, "hits") %016x; stream(0) %016x; below(10) x3 %d %d %d' % (
         hsh(seed, "hits"), Stream(0).next(),
         Stream(seed).below(10), Stream(seed + 1).below(10), Stream(seed + 2).below(10)))
+
+    print("\n== §3.4b Stagger (C major, a Chord voice at MIDI 48, size 4, Voicing 1, Sustain, changes every bar)")
+    name = lambda x: "CDEFGAB"[[0, 2, 4, 5, 7, 9, 11].index(x % 12)] + str(x // 12 - 1)
+    prog = [("Cmaj7", 0), ("G7", 7), ("Am7", 9)]
+    chords = [(nm, chord(r, 0, "Major", 4)) for nm, r in prog]
+    for nm, c in chords:
+        print(f"{nm:6}", " ".join(map(name, c)))
+    for (pn, pc), (nn, nc), at in [(chords[0], chords[1], 3840), (chords[1], chords[2], 7680)]:
+        held, leaving, arriving = sorted(set(pc) & set(nc)), sorted(set(pc) - set(nc)), sorted(set(nc) - set(pc))
+        print(f"{pn} → {nn}: holds {' '.join(map(name, held))}; moves",
+              ", ".join(f"{name(a)}→{name(b)}" for a, b in zip(leaving, arriving)))
+        for S, lean in [(8, "late"), (8, "around"), (16, "late")]:
+            st_ = stagger(at, [at - 3840, at + 3840], arriving, S, "up", lean)
+            ends = let_go(at, leaving, st_)
+            print(f"   Stagger {S:2}, Up, {lean:6}: starts", "  ".join(f"{name(x)} {t - at:+d}" for x, t in st_.items()),
+                  "| ends", "  ".join(f"{name(x)} {t - at:+d}" for x, t in ends.items()))
+    c = chords[0][1]
+    print("a fresh strike (the pass's start, bar 4), Stagger 8:")
+    for o in ("up", "down"):
+        r = stagger(4 * 3840, [3 * 3840, 5 * 3840], c, 8, o)
+        print(f"   {o:6}", "  ".join(f"{name(x)} {t - 4 * 3840:+d}" for x, t in r.items()))
+    for strike in (0, 3840, 7680):
+        h = hsh(seed, "stagger", 0xAA, strike)
+        r = stagger(strike, [strike - 3840, strike + 3840], c, 8, "seeded", h=h, at_start=(strike == 0))
+        print(f"   seeded (masterSeed 0123456789abcdef, voice 00000000000000aa) at {strike:5}:",
+              "  ".join(f"{name(x)} {t - strike:+d}" for x, t in sorted(r.items(), key=lambda kv: kv[1])))
+    r = stagger(0, [3840], c, 8, "up", "around", at_start=True)
+    print("   Around at the song's start, Stagger 8 (played as Late):", "  ".join(f"{name(x)} {t:+d}" for x, t in r.items()))
+    print("Restrike hits every 1/16 (gap 240), Stagger 16, Up: the spread is held to 120:",
+          "  ".join(f"{name(x)} {t - 960:+d}" for x, t in stagger(960, [720, 1200], c, 16).items()))
+    print("ordering by Stagger, Up, Cmaj7 fresh: S 4/8/16 →",
+          [[t for t in stagger(0, [3840], c, S, at_start=True).values()] for S in (4, 8, 16)])
+
+    print("\n== §3.4b Top (Cmaj7, velocity 100)")
+    for T in (0, 4, 8, 16):
+        print(f"Top {T:2}:", "  ".join(f"{name(x)} {v}" for x, v in top(c, 100, T).items()))
+    print("size 2 (C3 G3), Top 8:", top([48, 55], 100, 8), " size 1, Top 8:", top([48], 100, 8))
+
+    print("\n== §4.8 Push (4/4, changes every bar, the source at 1/16)")
+    ct = 3840
+    print("reach:", (ct // 2 - 1) // 240, "steps of 1/16 at a bar; changes every 1/4 bar:", (960 // 2 - 1) // 240)
+    src = riff(4, {1}, st=960)
+    print("a 5-bar section of changes every 4 bars, the source at 1/4 with a hit on beat 2, Late 4: change at bar 4 →",
+          push_arrival(4 * ct, 0, 5 * ct, 960, src, 0, 4) - 4 * ct, "(reach to the anchor at bar 5:",
+          ((ct) // 2 - 1) // 960, "steps)")
+    for label, acc in [("All", False), ("Accents", True)]:
+        src = riff(12, {1, 5, 7, 11}, {1, 7}, only_accents=acc)
+        arr = [push_arrival(c_ * ct, c_ * ct - ct, c_ * ct + ct, 240, src, 2, 1, anchor=(c_ == 0)) - c_ * ct for c_ in range(7)]
+        print(f"12-step riff, hits 1 5 7 11, accents 1 7, Early 2, Late 1, Hits {label:7}:",
+              "riff slot", [(c_ * 16) % 12 for c_ in range(7)], "arrival", arr)
+    src = riff(12, {1, 5, 7, 11}, {1, 7})
+    print("   the same, Swing 50 (odd steps 60 late):",
+          [push_arrival(c_ * ct, c_ * ct - ct, c_ * ct + ct, 240, src, 2, 1, swing=50, anchor=(c_ == 0)) - c_ * ct for c_ in range(7)])
+    src = riff(16, {2, 14, 15})
+    print("16-step riff, hits 2 14 15, Early 2, change 1:", push_arrival(ct, 0, 2 * ct, 240, src, 2, 0) - ct,
+          "(the nearest hit before the 1, not the furthest)")
+    src = riff(16, {1, 13})
+    print("16-step riff, hits 1 13, Late 1, change 1: Early 2 →", push_arrival(ct, 0, 2 * ct, 240, src, 2, 1) - ct,
+          " Early 3 →", push_arrival(ct, 0, 2 * ct, 240, src, 3, 1) - ct, "(a wider Early can turn a late arrival early)")
+    src = riff(16, {0, 15})
+    print("16-step riff, hits 0 15, Early 2: on the 1 →", push_arrival(ct, 0, 2 * ct, 240, src, 2, 0) - ct)
+    hs = 0x0123456789ABCDEF
+    rolls = [roll(hsh(hs, "push", k)) for k in range(4)]
+    print("Amount (harmony seed 0123456789abcdef, Length 4): rolls by k", rolls)
+    for A in (0, 4, 8, 12, 16):
+        print(f"   Amount {A:2}: k that push", [k for k in range(4) if rolls[k] < (100 * A) // 16])
 
     print("\n== §16.4 Euclidean")
     show = lambda h: "".join("x" if v else "." for v in h)
