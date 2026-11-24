@@ -5,7 +5,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstddef>
 #include <functional>
+#include <vector>
 
 #include "Editor.h"
 #include "Processor.h"
@@ -20,6 +22,23 @@ void check(bool ok, const char* what) {
     std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
     failures += !ok;
 }
+
+// The message loop for `ms`, then every live processor's and editor's timer, then the loop again for what that posted.
+// The timers are ticked by hand: a slow machine (a CI Mac) can let 150 ms pass without a 20 Hz tick, and a test that
+// moves a value and moves it back inside one wait would never see it move.
+std::vector<std::function<void()>> tickers;
+void settle(int ms) {
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(ms);
+    for (auto& t : tickers) t();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+}
+// Ticks `x` in every settle() for as long as it lives.
+struct Ticking {
+    template <typename T>
+    explicit Ticking(T& x) : at(tickers.size()) { tickers.push_back([&x] { x.tick(); }); }
+    ~Ticking() { tickers.erase(tickers.begin() + static_cast<std::ptrdiff_t>(at)); }
+    std::size_t at;
+};
 
 // The first visible button anywhere under `c` whose words are `text` (visible down the tree: the editor isn't on a
 // desktop here, so nothing is "showing").
@@ -38,7 +57,7 @@ void press(HocketEditor& e, HocketProcessor& p, const char* text) {
     if (auto* b = find(e, text)) b->triggerClick();
     else std::printf("     (no button \"%s\" showing)\n", text);
     p.endGesture();
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
 }
 
 template <typename T>
@@ -58,8 +77,9 @@ int main() {
     HocketProcessor p;
     p.setSeed(0x0123456789ABCDEFull);
     std::unique_ptr<HocketEditor> e(dynamic_cast<HocketEditor*>(p.createEditor()));
+    const Ticking tickP(p), tickE(*e);  // the processor's timer before the editor's, as the song moves then the screens
     e->setVisible(true);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
+    settle(200);
 
     // Song: Generate re-rolls, New progression changes the harmony seed, Lock chords locks it.
     e->showPage(3);
@@ -73,7 +93,7 @@ int main() {
 
     // Groups: Add voice, New group, and the new group's Delete.
     e->showPage(1);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
     press(*e, p, "Add voice");
     check(p.document().groups[0].voices.size() == 3, "Add voice gives Leads a third voice");
     check(p.document().groups[0].voices.size() == 3 && p.document().groups[0].voices[2].channel == 5, "on the first free channel (5), not the Chords' 3");
@@ -88,13 +108,13 @@ int main() {
     // A chord voice's Voicing has a second option: Nearest (§3.4a).
     p.edit([](hocket::Song& s) { s.groups[3].voices[0].type = hocket::VoiceType::Chord; });
     p.endGesture();
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
     press(*e, p, "Nearest");
     check(gs.size() == 4 && gs[3].voices[0].nearest && !gs[2].voices[0].nearest, "Nearest switches the chord voice to the nearest inversion");
     // Humanize (§4.7): the voice's Feel bars set its velocity and timing feel.
     p.edit([](hocket::Song& s) { s.groups[3].voices[0].type = hocket::VoiceType::Lead; });
     p.endGesture();
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
     {
         std::vector<hocket::ui::ValueBar*> feel;
         std::function<void(juce::Component&)> look = [&](juce::Component& c) {
@@ -128,7 +148,7 @@ int main() {
               "the rhythm panel offers Even and Metric, and Random has no knobs");
         if (rhythm) rhythm->setSelected(rhythm->options().indexOf("Even"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(gs.size() == 4 && gs[3].rhythmGen.use == "euclid" && gs[0].rhythmGen.use.empty(), "Even swaps the selected group to Euclidean");
         auto* pulses = dynamic_cast<hocket::ui::ValueBar*>(titled("Pulses"));
         if (pulses) pulses->setValue(7, true);
@@ -145,7 +165,7 @@ int main() {
               "a line's Notes row offers Wander, 1/f, Register, Pedal and Kotekan (no Pedal switch)");
         if (notesRow) notesRow->setSelected(2, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         auto* lock = dynamic_cast<hocket::ui::ValueBar*>(titled("Lock"));
         check(gs.size() == 4 && gs[3].voices[0].notesGen.use == "register" && lock != nullptr && lock->valueText() == "12",
               "Register: the voice's notes on a register, its Lock showing 12");
@@ -161,7 +181,7 @@ int main() {
         notesRow = dynamic_cast<hocket::ui::Segmented*>(titled("Notes"));
         if (notesRow) notesRow->setSelected(notesRow->options().indexOf("Kotekan"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         auto* source = dynamic_cast<hocket::ui::ValueBar*>(titled("Source"));
         auto* mode = dynamic_cast<hocket::ui::ValueBar*>(titled("Mode"));
         check(gs[3].voices[0].notesGen.use == "kotekan" && source != nullptr && source->valueText() == "none" && mode != nullptr &&
@@ -169,14 +189,14 @@ int main() {
               "Kotekan: its Source shows none, its Mode Telu");
         if (source) source->setValue(1, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(gs[3].voices[0].notesGen.sources.count("kotekan") && gs[3].voices[0].notesGen.sources.at("kotekan") == gs[0].voices[0].id &&
                   hocket::kotekanSource(p.document(), 3, 0).has_value(),
               "its Source picks the first other line (Leads · 1), and the Kotekan is live");
         rhythm = dynamic_cast<hocket::ui::Segmented*>(titled("Rhythm generator"));
         if (rhythm) rhythm->setSelected(rhythm->options().indexOf("Interlock"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         source = dynamic_cast<hocket::ui::ValueBar*>(titled("Source"));
         if (source) source->setValue(1, true);
         p.endGesture();
@@ -185,7 +205,7 @@ int main() {
         // §16.6, Resultant: its four knobs, the band's Low and High among them.
         if (rhythm) rhythm->setSelected(rhythm->options().indexOf("Resultant"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         source = dynamic_cast<hocket::ui::ValueBar*>(titled("Source"));
         if (source) source->setValue(1, true);
         p.endGesture();
@@ -208,7 +228,7 @@ int main() {
         check(deal != nullptr && deal->options().contains("Alternate") && deal->options().contains("Bells"), "the deal offers Alternate, Bells and Tutti");
         if (deal) deal->setSelected(deal->options().indexOf("Bells"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         auto* handoff = dynamic_cast<hocket::ui::ValueBar*>(titled("Handoff"));
         check(gs[3].deal == hocket::DealMode::Bells && handoff != nullptr && handoff->valueText() == "10 %", "Bells: the pitch deals, Handoff shows 10 %");
         if (handoff) handoff->setValue(25, true);
@@ -216,7 +236,7 @@ int main() {
         check(gs[3].handoff == 25, "Handoff sets the group's overlap at a handoff");
         if (deal) deal->setSelected(deal->options().indexOf("Tutti"), true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(gs[3].deal == hocket::DealMode::Tutti && titled("Handoff") == nullptr, "Tutti: every member, and no Handoff");
         press(*e, p, "Clean handoffs");  // §5.7
         // §5.8: Density from voices, the group's switch.
@@ -232,7 +252,7 @@ int main() {
 
     // Changes (§17.8): a source, a cord from it, and the cord deleted; then the rows: Add a change, Duplicate, Delete.
     e->showPage(2);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
     {
         const auto& mod = p.document().mod;
         press(*e, p, "+ LFOs");
@@ -270,7 +290,7 @@ int main() {
         look(*e);
         if (condition) condition->setSelected(1, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(condition != nullptr && m[1].cond.kind == hocket::Condition::Kind::AB && m[1].cond.a == 1 && m[1].cond.b == 2,
               "a row's condition: A:B starts as 1:2, every other time");
     }
@@ -281,7 +301,7 @@ int main() {
 
     // Play: a group's Mute.
     e->showPage(0);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+    settle(150);
     press(*e, p, "Mute");
     check(!p.document().groups.empty() && p.document().groups[0].mute, "Mute mutes the first group");
     // §9.2: Freeze is the host's "freeze" parameter, on and off again; it's never part of the song.
@@ -296,7 +316,7 @@ int main() {
     }
 
     // Undo and Redo: a step back through Mute and the row's Delete, and forward again.
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(150);  // the editor enables Undo
+    settle(150);  // the editor enables Undo
     press(*e, p, "Undo");
     check(!p.document().groups[0].mute, "Undo unmutes");
     press(*e, p, "Undo");
@@ -408,6 +428,7 @@ int main() {
         juce::MemoryBlock session;
         p.getStateInformation(session);
         HocketProcessor reopened;
+        const Ticking tick_reopened(reopened);
         reopened.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
         const hocket::Song a = p.current(), b = reopened.current();
         const std::int64_t end = hocket::barTicks(a) * 32;
@@ -430,6 +451,7 @@ int main() {
         juce::MemoryBlock old;
         juce::AudioProcessor::copyXmlToBinary(*xml, old);
         HocketProcessor before;
+        const Ticking tick_before(before);
         before.setStateInformation(old.getData(), static_cast<int>(old.getSize()));
         check(p.current().colour == 12 && before.current().colour == 0, "a session from before Colour opens with it off");
 
@@ -452,7 +474,7 @@ int main() {
 
         // Mode moves (§3.8): the Song screen's switch is the host parameter; a session from before it opens with it off.
         e->showPage(3);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         hocket::ui::ParamChoice* moves = nullptr;
         std::function<void(juce::Component&)> look = [&](juce::Component& c) {
             for (auto* child : c.getChildren()) {
@@ -481,7 +503,7 @@ int main() {
     // §18.1, the Form screen: a letter added joins the string; editing it sets its values, A keeps its own.
     {
         e->showPage(4);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         hocket::ui::Segmented* on = nullptr;
         std::function<void(juce::Component&)> look = [&](juce::Component& c) {
             for (auto* child : c.getChildren()) {
@@ -493,7 +515,7 @@ int main() {
         look(*e);
         if (on) on->setSelected(1, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(p.document().form.on, "the Form screen's switch plays the form");
         press(*e, p, "+ Letter");
         check(p.document().form.letters.size() == 1 && p.document().form.letters[0].name == 'B' && p.document().form.text == "A B",
@@ -503,7 +525,7 @@ int main() {
         check(p.editingLetter() == 'B', "Edit B: the screens edit B");
         p.edit([](hocket::Song& s) { s.groups[0].density = 3; });  // as the Groups screen's Density bar does
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         const auto& b = p.document();
         check(b.groups[0].density == 3, "editing B, the screens show B's value");
         bool set = false;
@@ -527,7 +549,7 @@ int main() {
         findIrama(*e);
         if (ir) ir->setSelected(4, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(ir != nullptr && p.document().groups[0].irama == 4, "the Form screen sets a group's irama (8 a chord)");
         // §18.4: a group's tihai, every gong.
         hocket::ui::Segmented* th = nullptr;
@@ -542,7 +564,7 @@ int main() {
         findTihai(*e);
         if (th) th->setSelected(4, true);
         p.endGesture();
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        settle(150);
         check(th != nullptr && p.document().groups[0].tihai == 1 && p.document().groups[0].tihaiUnit == 1, "the Form screen lands a tihai on every gong");
     }
 
@@ -551,8 +573,9 @@ int main() {
     // answers to one slot, its parameters show what plays, and the song and the host move each other.
     {
         HocketProcessor q;
+        const Ticking tick_q(q);
         q.setSeed(0x0123456789ABCDEFull);
-        auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil(150); };
+        auto pump = [] { settle(150); };
         auto value = [&](const char* id) {
             auto* x = q.params.getParameter(id);
             return x ? static_cast<int>(std::lround(x->convertFrom0to1(x->getValue()))) : -999;
@@ -635,6 +658,7 @@ int main() {
         juce::MemoryBlock session;
         q.getStateInformation(session);
         HocketProcessor again;
+        const Ticking tick_again(again);
         again.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
         pump();
         auto valueOf = [](HocketProcessor& x, const char* id) {
@@ -655,6 +679,7 @@ int main() {
         juce::MemoryBlock old;
         juce::AudioProcessor::copyXmlToBinary(*xml, old);
         HocketProcessor older;
+        const Ticking tick_older(older);
         older.setStateInformation(old.getData(), static_cast<int>(old.getSize()));
         pump();
         check(hocket::json::toString(older.document()) == hocket::json::toString(q.document()) && valueOf(older, "g1_density") == 12 &&
@@ -678,6 +703,7 @@ int main() {
             }
         };
         HocketProcessor q;
+        const Ticking tick_q(q);
         q.setSeed(0x0123456789ABCDEFull);
         q.edit([](hocket::Song& x) {
             x.matrix.clear();
@@ -685,7 +711,7 @@ int main() {
             for (hocket::Group& g : x.groups) g.swing = 0, g.jitter = 0, g.density = 3;
         });
         q.endGesture();
-        auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil(150); };
+        auto pump = [] { settle(150); };
         pump();
         Head head;
         q.setPlayHead(&head);
