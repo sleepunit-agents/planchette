@@ -56,6 +56,9 @@ std::pair<int, int> spanOf(const Song& s, Scope scope, std::uint64_t target, Par
         case Param::Stagger: case Param::Top: return {0, 16};
         case Param::StaggerOrder: return {0, 2};
         case Param::StaggerLean: return {0, 1};
+        case Param::PushAmount: return {0, 16};
+        case Param::PushEarly: case Param::PushLate: return {0, 4};
+        case Param::PushHits: case Param::OnGrid: case Param::StrikeWith: return {0, 1};
         case Param::Fill: case Param::ModeMoves: case Param::VoiceLeading: case Param::CleanHandoffs: return {0, 1};
         case Param::SoloMember: {
             const Group* g = scope == Scope::Group ? groupById(s, target) : nullptr;
@@ -96,6 +99,10 @@ std::optional<int> get(const Song& s, Scope scope, std::uint64_t target, Param p
                 case Param::Wander: return s.harmony.wander;
                 case Param::Length: return s.harmony.length;
                 case Param::ChangesEvery: return s.harmony.changesEvery;
+                case Param::PushAmount: return s.harmony.push.amount;
+                case Param::PushEarly: return s.harmony.push.early;
+                case Param::PushLate: return s.harmony.push.late;
+                case Param::PushHits: return static_cast<int>(s.harmony.push.hits);
                 default: return std::nullopt;
             }
         case Scope::Group: {
@@ -145,6 +152,8 @@ std::optional<int> get(const Song& s, Scope scope, std::uint64_t target, Param p
                 case Param::StaggerOrder: return static_cast<int>(v->staggerOrder);
                 case Param::StaggerLean: return static_cast<int>(v->staggerLean);
                 case Param::Top: return v->top;
+                case Param::OnGrid: return v->onGrid ? 1 : 0;
+                case Param::StrikeWith: return static_cast<int>(v->strikeWith);
                 default: return std::nullopt;
             }
         }
@@ -175,6 +184,10 @@ void set(Song& s, Scope scope, std::uint64_t target, Param p, int x) {
                 case Param::Wander: s.harmony.wander = x; break;
                 case Param::Length: s.harmony.length = x; break;
                 case Param::ChangesEvery: s.harmony.changesEvery = x; break;
+                case Param::PushAmount: s.harmony.push.amount = x; break;
+                case Param::PushEarly: s.harmony.push.early = x; break;
+                case Param::PushLate: s.harmony.push.late = x; break;
+                case Param::PushHits: s.harmony.push.hits = static_cast<PushHits>(x); break;
                 default: break;
             }
             break;
@@ -225,6 +238,8 @@ void set(Song& s, Scope scope, std::uint64_t target, Param p, int x) {
                 case Param::StaggerOrder: v->staggerOrder = static_cast<StaggerOrder>(x); break;
                 case Param::StaggerLean: v->staggerLean = static_cast<StaggerLean>(x); break;
                 case Param::Top: v->top = x; break;
+                case Param::OnGrid: v->onGrid = x != 0; break;
+                case Param::StrikeWith: v->strikeWith = static_cast<StrikeWith>(x); break;
                 default: break;
             }
             break;
@@ -428,7 +443,8 @@ constexpr const char* kParamKeys[] = {
     "chordSize", "length", "root", "scale", "soloMember", "deal", "direction", "articulation", "changesEvery", "reroll.rhythm",
     "reroll.pitch", "reroll.deal", "reroll.all", "vary.pitch", "vary.rhythm", "probability", "ratchet", "repeats", "fill", "modeMoves",
     "nearest", "humanVelocity", "humanTiming", "handoff", "cleanHandoffs",
-    "stagger", "staggerOrder", "staggerLean", "top"};
+    "stagger", "staggerOrder", "staggerLean", "top",
+    "pushAmount", "pushEarly", "pushLate", "pushHits", "onGrid", "strikeWith"};
 static_assert(sizeof(kParamKeys) / sizeof(kParamKeys[0]) == static_cast<int>(kLastParam) + 1, "a key for every param");
 }  // namespace
 

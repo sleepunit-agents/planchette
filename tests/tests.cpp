@@ -170,6 +170,25 @@ static std::vector<Song> songs() {
     n.groups[2].voices[0].stagger = 8, n.groups[2].voices[0].staggerLean = StaggerLean::Around, n.groups[2].voices[0].nearest = true;
     n.groups[2].voices[0].top = 6, n.harmony.changesEvery = 0;
     out.push_back(n);
+    // §4.8: Push from the Leads, early and late, on a swung and jittered riff with changes every 1/2 bar; a Chord voice
+    // on Restrike hits striking with the source, staggered; a Pulse chord with Nearest striking with it; the bass on
+    // the grid; and a Nyok cok Kotekan reading the next arrival.
+    Song u = s;
+    u.harmony.push.source = u.groups[0].id, u.harmony.push.early = 2, u.harmony.push.late = 1;
+    u.groups[2].voices[0].strikeWith = StrikeWith::Source, u.groups[2].voices[0].stagger = 12;
+    out.push_back(u);
+    Song w = r;
+    w.harmony.push.source = w.groups[0].id, w.harmony.push.early = 4, w.harmony.push.late = 4, w.harmony.push.hits = PushHits::Accents;
+    w.groups[2].voices[0].strikeWith = StrikeWith::Source, w.groups[2].voices[0].nearest = true;
+    w.groups[1].voices[0].onGrid = true;
+    out.push_back(w);
+    Song x = defaultSong(0x77AA);
+    x.harmony.push.source = x.groups[1].id, x.harmony.push.amount = 10, x.harmony.push.early = 3;
+    x.groups[2].voices[0].nearest = true, x.groups[2].voices[0].stagger = 6, x.groups[2].voices[0].staggerLean = StaggerLean::Around;
+    x.groups[0].voices[1].notesGen.use = "kotekan";
+    x.groups[0].voices[1].notesGen.sources["kotekan"] = x.groups[0].voices[0].id;
+    x.groups[0].voices[1].notesGen.params["kotekan"]["mode"] = 3;
+    out.push_back(x);
     return out;
 }
 
@@ -1297,6 +1316,167 @@ static void nearestVoicing() {
     Row& r = addRow(m);
     r.scope = Scope::Voice, r.target = m.groups[2].voices[0].id, r.param = Param::VoiceLeading, r.every = 2, r.allowed = {1}, r.lasts = 1;
     CHECK(!stateAt(m, 1).groups[2].voices[0].nearest && stateAt(m, 2).groups[2].voices[0].nearest && !stateAt(m, 3).groups[2].voices[0].nearest);
+}
+
+// §4.8: Push. The spec's worked values (tools/spec_arith.py, "§4.8 Push"), what reads the arrival (a Chord voice
+// strikes there, a voice on the grid doesn't), Strike with: Source, and off: bit for bit.
+static std::pair<std::uint64_t, int> riffSeed(int L, const std::set<int>& on, const std::set<int>& accents, bool checkAccents) {
+    for (std::uint64_t i = 1; i < 4000000; ++i) {
+        const std::uint64_t seed = hash(0x5EED, {"riff", i});
+        if (checkAccents) {
+            bool ok = true;
+            for (int slot : on) ok = ok && accentAt(seed, slot) == (accents.count(slot) > 0);
+            if (!ok) continue;
+        }
+        for (int d = 1; d <= 16; ++d) {
+            const std::vector<bool> h = hits(seed, L, d);
+            std::set<int> got;
+            for (int k = 0; k < L; ++k)
+                if (h[static_cast<std::size_t>(k)]) got.insert(k);
+            if (got == on) return {seed, d};
+        }
+    }
+    return {0, 0};
+}
+
+static void push() {
+    Song base = defaultSong(0x0123456789ABCDEFull);
+    base.matrix.clear();
+    base.harmony.changesEvery = 2;  // every bar
+    const std::int64_t bt = barTicks(base), ct = bt;
+    auto withRiff = [&](int L, std::set<int> on, std::set<int> acc, int division) {
+        Song s = base;
+        Group& g = s.groups[0];
+        const auto [seed, d] = riffSeed(L, on, acc, !acc.empty());
+        CHECK(seed != 0);
+        g.steps = L, g.beatDivision = division, g.rhythmSeed = seed, g.density = d;
+        g.swing = 0, g.jitter = 0, g.probability = 100, g.ratchet = 0, g.fillEvery = 0;
+        s.harmony.push.source = g.id;
+        return s;
+    };
+    {  // 12-step riff at 1/16, hits 1 5 7 11, accents 1 7, Early 2, Late 1, Amount 16
+        Song s = withRiff(12, {1, 5, 7, 11}, {1, 7}, kDivision16th);
+        s.harmony.push.early = 2, s.harmony.push.late = 1;
+        const std::int64_t all[] = {0, 240, -240, -240, 240, -240, -240};
+        for (int c = 0; c < 7; ++c) CHECK(pushArrival(s, c * ct) - c * ct == all[c]);
+        s.harmony.push.hits = PushHits::Accents;
+        const std::int64_t acc[] = {0, 0, -240, 240, 0, -240, 240};
+        for (int c = 0; c < 7; ++c) CHECK(pushArrival(s, c * ct) - c * ct == acc[c]);
+        s.harmony.push.hits = PushHits::All, s.groups[0].swing = 50;
+        const std::int64_t sw[] = {0, 300, -180, -180, 300, -180, -180};
+        for (int c = 0; c < 7; ++c) CHECK(pushArrival(s, c * ct) - c * ct == sw[c]);
+        // Nested: turning Amount down only takes pushes away, and the same places stay.
+        s.groups[0].swing = 0;
+        s.harmony.seed = 0x0123456789abcdefull, s.harmony.length = 4;
+        const int rolls[] = {56, 68, 5, 68};
+        for (int k = 0; k < 4; ++k) CHECK(roll(hash(s.harmony.seed, {"push", k})) == rolls[k]);
+        for (int amount : {4, 8, 12, 16}) {
+            s.harmony.push.amount = amount;
+            for (int c = 1; c < 7; ++c) {
+                const bool pushes = rolls[c % 4] < (100 * amount) / 16;
+                CHECK((pushArrival(s, c * ct) == c * ct) == !pushes || all[c] == 0);
+            }
+        }
+        s.harmony.push.amount = 0;
+        for (int c = 0; c < 7; ++c) CHECK(pushArrival(s, c * ct) == c * ct);
+    }
+    {  // the rules at their edges, each at change 1 of a 16-step riff at 1/16
+        Song a = withRiff(16, {2, 14, 15}, {}, kDivision16th);
+        a.harmony.push.early = 2;
+        CHECK(pushArrival(a, ct) - ct == -240);  // the nearest hit before the 1, not the furthest
+        Song b = withRiff(16, {1, 13}, {}, kDivision16th);
+        b.harmony.push.late = 1, b.harmony.push.early = 2;
+        CHECK(pushArrival(b, ct) - ct == 240);  // nothing early in reach: the late hit
+        b.harmony.push.early = 3;
+        CHECK(pushArrival(b, ct) - ct == -720);  // the wider window finds slot 13 first
+        Song c = withRiff(16, {0, 15}, {}, kDivision16th);
+        c.harmony.push.early = 2;
+        CHECK(pushArrival(c, ct) - ct == 0);  // the riff plays the 1
+    }
+    {  // at an anchor's edge: changes every 4 bars, the source at 1/4, Late 4, a section 5 bars long
+        Song s = withRiff(4, {1}, {}, 9);
+        s.harmony.changesEvery = 4, s.harmony.push.early = 0, s.harmony.push.late = 4;
+        CHECK(pushArrival(s, 4 * bt, 5) - 4 * bt == 960);  // late reach 1 step: beat 2, the last chord still heard
+        Song t = withRiff(4, {2}, {}, 9);
+        t.harmony.changesEvery = 4, t.harmony.push.early = 0, t.harmony.push.late = 4;
+        CHECK(pushArrival(t, 4 * bt, 5) == 4 * bt);         // beat 3 is halfway to the section's end: out of reach
+        CHECK(pushArrival(t, 4 * bt) - 4 * bt == 1920);     // with no end there, in reach
+        CHECK(pushArrival(t, 5 * bt, 5) == 5 * bt);         // the next section's first change stays on its grid
+    }
+    {  // what reads it: the Chord voice strikes at the arrival, a voice on the grid on the grid tick, and the harmony
+       // a pushed strike plays is its own change's
+        Song s = withRiff(12, {1, 5, 7, 11}, {1, 7}, kDivision16th);
+        s.harmony.push.early = 2, s.harmony.push.late = 1;
+        const std::uint64_t cid = s.groups[2].voices[0].id;
+        auto startsNear = [&](const Song& song, std::int64_t G) {
+            std::set<std::int64_t> st;
+            for (const Note& n : notes(song, G - ct / 2, G + ct / 2))
+                if (n.voice == cid && n.start >= G - ct / 2 && n.start < G + ct / 2) st.insert(n.start);
+            return st;
+        };
+        Song grid = s;
+        grid.groups[2].voices[0].onGrid = true;
+        int moved = 0;
+        for (int c = 1; c < 7; ++c) {
+            const std::int64_t G = c * ct, A = pushArrival(s, G);
+            const std::set<std::int64_t> pushed = startsNear(s, G), onGrid = startsNear(grid, G);
+            CHECK(pushed.size() <= 1 && onGrid.size() <= 1);
+            CHECK(pushed.empty() == onGrid.empty());
+            if (pushed.empty()) continue;  // the same chord again: nothing struck
+            CHECK(*pushed.begin() == A && *onGrid.begin() == G);
+            moved += A != G;
+            // The notes struck at the arrival are the notes struck on the grid.
+            std::multiset<int> a, b;
+            for (const Note& n : notes(s, A, A + 1)) if (n.voice == cid && n.start == A) a.insert(n.note);
+            for (const Note& n : notes(grid, G, G + 1)) if (n.voice == cid && n.start == G) b.insert(n.note);
+            CHECK(a == b);
+        }
+        CHECK(moved > 0);
+        std::printf("  push: %d of 6 changes struck off the grid, at the riff's hits\n", moved);
+        // Strike with: Source on Restrike hits: a strike on each of the riff's hits, at its sounding tick.
+        Song r = s;
+        r.groups[2].voices[0].articulation = Articulation::RestrikeHits, r.groups[2].voices[0].strikeWith = StrikeWith::Source;
+        std::set<std::int64_t> strikes;
+        for (const Note& n : notes(r, 0, 3 * bt))
+            if (n.voice == cid) strikes.insert(n.start);
+        for (std::int64_t a = 0; a * 240 < 3 * bt; ++a)
+            if (std::set<int>{1, 5, 7, 11}.count(static_cast<int>(a % 12))) CHECK(strikes.count(a * 240));
+        // ...and on Pulse: a chord on each riff hit, for its gate, one strike per step.
+        Song q = r;
+        q.groups[2].voices[0].articulation = Articulation::Pulse;
+        std::set<std::int64_t> pulses;
+        for (const Note& n : notes(q, 0, 3 * bt))
+            if (n.voice == cid) pulses.insert(n.start);
+        std::set<std::int64_t> want;
+        for (std::int64_t a = 0; a * 240 < 3 * bt; ++a)
+            if (std::set<int>{1, 5, 7, 11}.count(static_cast<int>(a % 12))) want.insert(a * 240);
+        CHECK(pulses == want);
+        // Muting the riff doesn't move the chords.
+        Song m = s;
+        m.groups[0].mute = true;
+        for (int c = 1; c < 7; ++c) CHECK(startsNear(m, c * ct) == startsNear(s, c * ct));
+    }
+    {  // off: no source, a source that isn't live (Resultant), or Amount 0: the notes are the song's without Push
+        const std::int64_t end = 16 * bt;
+        for (const Song& song : songs()) {
+            if (song.harmony.push.source != 0) continue;
+            const std::vector<Note> plain = notes(song, 0, end);
+            Song a = song;
+            a.harmony.push.early = 3, a.harmony.push.late = 2, a.harmony.push.hits = PushHits::Accents;
+            a.groups[2].voices[0].onGrid = true;
+            CHECK(notes(a, 0, end) == plain);
+            Song b = song;
+            b.harmony.push.source = b.groups[0].id, b.harmony.push.amount = 0;
+            CHECK(notes(b, 0, end) == plain);
+        }
+        Song r = base;
+        r.groups[1].rhythmGen.use = "resultant";
+        r.groups[1].rhythmGen.sources["resultant"] = r.groups[0].id;
+        const std::vector<Note> plain = notes(r, 0, end);
+        Song rp = r;
+        rp.harmony.push.source = r.groups[1].id;
+        CHECK(notes(rp, 0, end) == plain);
+    }
 }
 
 // §3.4b: Stagger and Top. The spec's worked values (tools/spec_arith.py, "§3.4b Stagger" and "§3.4b Top"), the
@@ -3618,6 +3798,7 @@ int main() {
     modeMoves();
     nearestVoicing();
     staggerAndTop();
+    push();
     humanize();
     evolve();
     nextFirings();

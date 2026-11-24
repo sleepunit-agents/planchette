@@ -120,7 +120,7 @@ std::vector<std::pair<Dest, int>> letterValues(const Song& a, const Song& x) {
     };
     for (const char* key : {"range", "wander", "accent", "gatePercent", "octaveLow", "octaveHigh", "root", "scale", "modeMoves"})
         put(Scope::Global, 0, key);
-    for (const char* key : {"range", "wander", "length", "changesEvery"}) put(Scope::Harmony, 0, key);
+    for (const char* key : {"range", "wander", "length", "changesEvery", "pushAmount", "pushEarly", "pushLate", "pushHits"}) put(Scope::Harmony, 0, key);
     auto overrides = [&](Scope scope, std::uint64_t id, const Overrides& oa, const Overrides& ox) {
         // A level's own value only where the letter sets one (§1.2): one it inherits follows its level above.
         const std::pair<const char*, std::pair<std::optional<int>, std::optional<int>>> all[] = {
@@ -155,7 +155,7 @@ std::vector<std::pair<Dest, int>> letterValues(const Song& a, const Song& x) {
             for (const Voice& v : ga->voices)
                 if (v.id == vx.id) va = &v;
             if (!va) continue;
-            for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top"})
+            for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top", "onGrid", "strikeWith"})
                 put(Scope::Voice, vx.id, key);
             overrides(Scope::Voice, vx.id, va->overrides, vx.overrides);
             if (vx.type != VoiceType::Chord) generators(Scope::Voice, vx.id, SlotKind::Notes, va->notesGen, vx.notesGen);
@@ -173,7 +173,7 @@ void keepValues(const Song& from, Song& to) {
     };
     for (const char* key : {"range", "wander", "accent", "gatePercent", "octaveLow", "octaveHigh", "root", "scale", "modeMoves"})
         copy(Scope::Global, 0, key);
-    for (const char* key : {"range", "wander", "length", "changesEvery"}) copy(Scope::Harmony, 0, key);
+    for (const char* key : {"range", "wander", "length", "changesEvery", "pushAmount", "pushEarly", "pushLate", "pushHits"}) copy(Scope::Harmony, 0, key);
     for (Group& gt : to.groups)
         for (const Group& gf : from.groups) {
             if (gf.id != gt.id) continue;
@@ -184,7 +184,7 @@ void keepValues(const Song& from, Song& to) {
             for (Voice& vt : gt.voices)
                 for (const Voice& vf : gf.voices) {
                     if (vf.id != vt.id) continue;
-                    for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top"})
+                    for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top", "onGrid", "strikeWith"})
                         copy(Scope::Voice, vt.id, key);
                     vt.overrides = vf.overrides;
                     vt.notesGen.params = vf.notesGen.params;

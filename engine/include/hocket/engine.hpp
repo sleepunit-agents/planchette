@@ -64,6 +64,9 @@ int slotAt(std::int64_t absStep, int steps, Direction direction, int offset);
 // §4.5: the current chord's root pitch class at a tick (the matrix applied), and the saved progression's indices.
 std::vector<int> progression(const Song& song);
 int chordRootAt(const Song& song, std::int64_t tick);
+// §4.8: the tick the change on grid tick `gridTick` is heard from under Push (the grid tick itself when nothing moves
+// it). `endBar` ≥ 1: a section that ends there, the anchor a late arrival stays inside.
+std::int64_t pushArrival(const Song& song, std::int64_t gridTick, std::int64_t endBar = -1);
 std::int64_t changeTicks(const Song& song);
 std::int64_t barTicks(const Song& song);
 

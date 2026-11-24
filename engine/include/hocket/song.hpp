@@ -40,6 +40,8 @@ enum class Direction { Forward, Backward, Pendulum };
 enum class Articulation { Sustain, RestrikeAccents, RestrikeHits, Pulse };
 enum class StaggerOrder { Up, Down, Seeded };  // §3.4b: lowest first, highest first, the master seed's
 enum class StaggerLean { Late, Around };       // §3.4b: from the strike on, or half before it and half after
+enum class PushHits { All, Accents };          // §4.8: which of the source's steps a change may push to
+enum class StrikeWith { OwnHits, Source };     // §4.8: a Chord voice's restrikes and pulses, from its own hits or the source's
 
 // §16: a slot holds one generator, by name, and the parameters of every generator it has had (so swapping away and
 // back brings a generator's knobs back). An empty or unknown `use` plays the slot's default. `extra` is what this
@@ -87,6 +89,10 @@ struct Voice {
     StaggerOrder staggerOrder = StaggerOrder::Up;
     StaggerLean staggerLean = StaggerLean::Late;
     int top = 0;
+    // §4.8: a voice on the grid reads the harmony as §4.5 has it, not where Push moves it; a Chord voice's restrikes
+    // and pulses can come from the Push source's hits.
+    bool onGrid = false;
+    StrikeWith strikeWith = StrikeWith::OwnHits;
     // Lead, Bass (§4.3)
     bool tie = false;
     bool lockNotes = false;  // Generate leaves its pitch seed alone (§2.2)
@@ -151,6 +157,15 @@ struct Harmony {
     int range = 5;         // 1–16
     int wander = 8;        // 1–16
     bool locked = false;   // Generate keeps the progression
+    // §4.8 Push: each change arrives on a source group's hit near it. Off with no source (0), or a source that isn't
+    // live; then nothing is drawn.
+    struct Push {
+        std::uint64_t source = 0;  // a group's id
+        int amount = 16;           // 0–16
+        int early = 1;             // 0–4 of the source's steps
+        int late = 0;              // 0–4
+        PushHits hits = PushHits::All;
+    } push;
 };
 
 struct Song {

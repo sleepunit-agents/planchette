@@ -110,6 +110,12 @@ const char* paramName(Param p) {
         case Param::StaggerOrder: return "stagger order";
         case Param::StaggerLean: return "stagger lean";
         case Param::Top: return "top";
+        case Param::PushAmount: return "push amount";  // §4.8
+        case Param::PushEarly: return "push early";
+        case Param::PushLate: return "push late";
+        case Param::PushHits: return "push hits";
+        case Param::OnGrid: return "on the grid";
+        case Param::StrikeWith: return "strike with";
         default: return "setting";
     }
 }
@@ -285,13 +291,14 @@ std::vector<Param> paramsFor(Scope sc) {
     switch (sc) {
         case Scope::Global: return {Param::Range, Param::Wander, Param::Accent, Param::GatePercent, Param::OctaveLow, Param::OctaveHigh, Param::Fill,
                                     Param::ModeMoves};
-        case Scope::Harmony: return {Param::Range, Param::Wander, Param::Length, Param::ChangesEvery};
+        case Scope::Harmony: return {Param::Range, Param::Wander, Param::Length, Param::ChangesEvery, Param::PushAmount, Param::PushEarly,
+                                     Param::PushLate, Param::PushHits};
         case Scope::Group: return {Param::Density, Param::Steps, Param::Swing, Param::Offset, Param::Range, Param::Wander, Param::Accent,
                                    Param::GatePercent, Param::SoloMember, Param::DealMode, Param::Direction, Param::Probability, Param::Ratchet,
                                    Param::Repeats, Param::Fill, Param::Handoff, Param::CleanHandoffs};
         case Scope::Voice: return {Param::Range, Param::Wander, Param::Weight, Param::Density, Param::Accent, Param::GatePercent, Param::Voicing, Param::ChordSize, Param::OctaveLow,
                                    Param::OctaveHigh, Param::Articulation, Param::VoiceLeading, Param::HumanVelocity, Param::HumanTiming,
-                                   Param::Stagger, Param::StaggerOrder, Param::StaggerLean, Param::Top};
+                                   Param::Stagger, Param::StaggerOrder, Param::StaggerLean, Param::Top, Param::OnGrid, Param::StrikeWith};
     }
     return {};
 }
@@ -311,6 +318,9 @@ juce::StringArray pickOptions(const Song& s, const Row& r) {
         case Param::VoiceLeading: return {"Fixed", "Nearest"};
         case Param::StaggerOrder: return {"Up", "Down", "Seeded"};  // §3.4b
         case Param::StaggerLean: return {"Late", "Around"};
+        case Param::PushHits: return {"All", "Accents"};  // §4.8
+        case Param::OnGrid: return {"Pushed", "On the grid"};
+        case Param::StrikeWith: return {"Own hits", "Source"};
         case Param::SoloMember: {
             juce::StringArray o;
             if (const Group* g = groupOf(s, r.target))
@@ -817,7 +827,8 @@ private:
             case Param::OctaveLow: case Param::OctaveHigh: return {-1, 2};
             case Param::Steps: return {1, 64};
             case Param::Offset: return {0, 63};
-            case Param::Weight: case Param::Stagger: case Param::Top: return {0, 16};
+            case Param::Weight: case Param::Stagger: case Param::Top: case Param::PushAmount: return {0, 16};
+            case Param::PushEarly: case Param::PushLate: return {0, 4};
             case Param::ChordSize: return {1, 6};
             default: return {1, 16};
         }
@@ -1647,7 +1658,8 @@ private:
             case Param::OctaveLow: case Param::OctaveHigh: return {-1, 2};
             case Param::Steps: return {1, 64};
             case Param::Offset: return {0, 63};
-            case Param::Weight: case Param::Stagger: case Param::Top: return {0, 16};
+            case Param::Weight: case Param::Stagger: case Param::Top: case Param::PushAmount: return {0, 16};
+            case Param::PushEarly: case Param::PushLate: return {0, 4};
             case Param::ChordSize: return {1, 6};
             default: return {1, 16};
         }

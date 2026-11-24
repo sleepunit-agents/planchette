@@ -192,6 +192,10 @@ void sanitize(Song& s) {
     s.harmony.length = clamp(s.harmony.length, 1, 16);
     s.harmony.range = clamp(s.harmony.range, 1, 16);
     s.harmony.wander = clamp(s.harmony.wander, 1, 16);
+    s.harmony.push.amount = clamp(s.harmony.push.amount, 0, 16);
+    s.harmony.push.early = clamp(s.harmony.push.early, 0, 4);
+    s.harmony.push.late = clamp(s.harmony.push.late, 0, 4);
+    s.harmony.push.hits = clampEnum(s.harmony.push.hits, 1);
     if (s.groups.size() > 64) s.groups.resize(64);
     bool groupSlot[kGroupSlots + 1] = {}, voiceSlot[kVoiceSlots + 1] = {};
     for (Group& g : s.groups) {
@@ -243,6 +247,7 @@ void sanitize(Song& s) {
             v.staggerOrder = clampEnum(v.staggerOrder, 2);
             v.staggerLean = clampEnum(v.staggerLean, 1);
             v.top = clamp(v.top, 0, 16);
+            v.strikeWith = clampEnum(v.strikeWith, 1);
             clampOverrides(v.overrides);
         }
     }
