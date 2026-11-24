@@ -336,8 +336,10 @@ struct Step {
 class World {
 public:
     // `hold` ≥ 1: Freeze (§9, §17.6) holds from that bar line on, every later bar playing the state of bar hold − 1.
-    explicit World(const Song& song, std::int64_t hold = -1)
-        : replay_(song), barTicks_(hocket::barTicks(song)), hold_(hold >= 1 ? hold : -1) {
+    // `endBar` ≥ 1: the section it plays ends there (§18.1), an edge Stagger spreads up to (§3.4b); −1 none.
+    explicit World(const Song& song, std::int64_t hold = -1, std::int64_t endBar = -1)
+        : replay_(song), barTicks_(hocket::barTicks(song)), hold_(hold >= 1 ? hold : -1),
+          end_(endBar >= 1 ? endBar * barTicks_ : -1) {
         // §18.4: only a song that has a tihai somewhere looks for one.
         for (const Group& g : song.groups) tihai_ = tihai_ || g.tihai > 0 || g.tihaiNow;
         for (const Row& r : song.matrix) tihai_ = tihai_ || r.key == "tihai";
@@ -350,6 +352,7 @@ public:
     const State& state(std::int64_t bar) { return replay_.at(hold_ >= 1 && bar >= hold_ ? hold_ - 1 : bar); }
     const State& replayed(std::int64_t bar) { return replay_.at(bar); }
     std::int64_t hold() const { return hold_; }
+    std::int64_t endTick() const { return end_; }
 
     const GroupPlay& play(std::int64_t bar, std::size_t gi) {
         bar = std::max<std::int64_t>(0, bar);
@@ -627,6 +630,7 @@ private:
     detail::Replay replay_;
     std::int64_t barTicks_;
     std::int64_t hold_ = -1;
+    std::int64_t end_ = -1;
     bool tihai_ = false;
     std::map<std::pair<std::int64_t, std::size_t>, std::unique_ptr<GroupPlay>> plays_;
     struct RegKey {
@@ -987,6 +991,36 @@ std::vector<int> voicedAt(World& w, std::size_t gi, int vi, std::int64_t tick) {
     return chord;
 }
 
+// ---- Stagger and Top (§3.4b) ------------------------------------------------------------------------------
+
+// Top: each note's velocity before Feel, from the whole chord as struck (ascending): the top note +Top, the lowest as
+// it is, the notes between −Top/2. Nothing is drawn.
+int topVelocity(const std::vector<int>& chord, int note, int v, int top) {
+    top = clampi(top, 0, 16);
+    if (top == 0 || chord.size() < 2) return v;
+    if (note == chord.back()) return clampi(v + top, 1, 127);
+    if (note == chord.front()) return v;
+    return clampi(v - top / 2, 1, 127);
+}
+
+// Stagger's offsets for the notes starting at a strike, `spread` already held inside its neighbours. `starting` is
+// ascending; the result is parallel to it.
+std::vector<std::int64_t> staggerOffsets(const Song& song, const Voice& v, std::int64_t strike, const std::vector<int>& starting,
+                                         std::int64_t spread) {
+    const int m = static_cast<int>(starting.size());
+    std::vector<std::int64_t> off(starting.size(), 0);
+    if (spread <= 0 || m == 0) return off;
+    std::vector<int> order(starting.size());  // order[i]: the index (from the lowest) of the note at place i
+    std::iota(order.begin(), order.end(), 0);
+    if (v.staggerOrder == StaggerOrder::Down) std::reverse(order.begin(), order.end());
+    else if (v.staggerOrder == StaggerOrder::Seeded) order = priorityOrder(hash(song.masterSeed, {"stagger", v.id, strike}), m);
+    const bool around = v.staggerLean == StaggerLean::Around && strike != 0;  // at the start, Around plays as Late
+    for (int i = 0; i < m; ++i)
+        off[static_cast<std::size_t>(order[static_cast<std::size_t>(i)])] =
+            (m >= 2 ? spread * i / (m - 1) : 0) - (around ? spread / 2 : 0);
+    return off;
+}
+
 void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::int64_t to, std::vector<Note>& out) {
     from = std::max<std::int64_t>(0, from);
     auto voiceAt = [&](std::int64_t bar) -> const Voice& { return w.play(bar, gi).group().voices[vi]; };
@@ -1000,36 +1034,16 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
     auto owned = [&](const Step& s) { return s.valid && s.hit && (s.owner == vi || (s.owner == kTutti && w.play(s.bar, gi).member(vi))); };
     auto silent = [&](std::int64_t bar) { return w.play(bar, gi).group().mute || voiceAt(bar).mute; };
 
-    // Pulse (v0.4): a chord on each hit the voice owns, for the hit's gate.
-    for (Step s = w.stepFrom(gi, from); s.nominal < to; s = w.after(gi, s)) {
-        if (!owned(s) || silent(s.bar) || voiceAt(s.bar).articulation != Articulation::Pulse) continue;
-        const GroupPlay& p = w.play(s.bar, gi);
-        const int gatePercent = resolve(p.song(), p.group(), voiceAt(s.bar)).gatePercent;
-        const auto [root, major] = w.chordAt(s.tick);
-        const std::vector<int> chord = voiceAt(s.bar).nearest ? voicedAt(w, gi, vi, s.tick) : chordNotes(p.song(), voiceAt(s.bar), root, major);
-        if (const int n = p.repeats(s.bar, s.absStep); n > 1) {  // a ratcheted Pulse chord (§4.6)
-            for (const Repeat& r : ratchetOf(s, p.stepTicks(), n, gatePercent, hitVelocity(s), p.group().ramp))
-                for (int note : chord)
-                    out.push_back({r.start, r.end, voiceAt(s.bar).channel, note, humanVelocity(p.song(), voiceAt(s.bar), s.nominal, note, r.velocity),
-                                   voiceAt(s.bar).id});
-            continue;
-        }
-        const std::int64_t len = gateTicks(p.stepTicks(), p.gate(s.slot), gatePercent);
-        for (int n : chord)
-            out.push_back({s.tick, s.tick + len, voiceAt(s.bar).channel, n, humanVelocity(p.song(), voiceAt(s.bar), s.nominal, n, hitVelocity(s)),
-                           voiceAt(s.bar).id});
-    }
-
-    // Sustain and Restrike: the chord holds from change to change. At a change, notes both chords share carry on;
-    // a restrike (a hit the voice owns), the start of each pass through the progression, and a re-anchored harmony
-    // strike everything afresh. So the walk starts at the fresh point at or before `from` and stops at the first fresh
-    // point at or after `to`, where every note started before `to` has ended.
+    // Sustain and Restrike: where the chord is struck in a bar. A change (fresh at the start of each pass through the
+    // progression, and at a re-anchored harmony) or a restrike (a hit the voice owns).
     struct Boundary {
         std::int64_t tick;
         bool fresh;
         int velocity;
     };
-    auto boundariesIn = [&](std::int64_t bar) {
+    std::map<std::int64_t, std::vector<Boundary>> boundaryCache;
+    auto boundariesIn = [&](std::int64_t bar) -> const std::vector<Boundary>& {
+        if (auto it = boundaryCache.find(bar); it != boundaryCache.end()) return it->second;
         std::vector<Boundary> bs;
         const State& st = w.state(bar);
         const std::int64_t ct = changeTicks(st.song);
@@ -1053,11 +1067,85 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
             }
             merged.push_back(b);
         }
-        return merged;
+        return boundaryCache.emplace(bar, std::move(merged)).first->second;
     };
+
+    // §3.4b: the voice's strikes that sound, in [lo, hi]: its changes and restrikes in a bar it sounds Sustain or
+    // Restrike in, its hits that play (and their ratchet repeats) in a bar it plays Pulse in.
+    auto strikesIn = [&](std::int64_t lo, std::int64_t hi) {
+        std::vector<std::int64_t> ts;
+        for (std::int64_t bar = std::max<std::int64_t>(0, w.barOf(lo) - 1); bar <= w.barOf(hi); ++bar) {
+            if (silent(bar)) continue;
+            if (voiceAt(bar).articulation != Articulation::Pulse) {
+                for (const Boundary& b : boundariesIn(bar)) ts.push_back(b.tick);
+                continue;
+            }
+            const std::int64_t b0 = bar * w.barTicks(), b1 = (bar + 1) * w.barTicks();
+            for (Step s = w.stepFrom(gi, b0); s.nominal < b1; s = w.after(gi, s)) {
+                if (!owned(s)) continue;
+                const GroupPlay& p = w.play(s.bar, gi);
+                if (const int n = p.repeats(s.bar, s.absStep); n > 1) {
+                    for (const Repeat& r : ratchetOf(s, p.stepTicks(), n, 100, 100, 0)) ts.push_back(r.start);
+                } else {
+                    ts.push_back(s.tick);
+                }
+            }
+        }
+        return ts;
+    };
+    // §3.4b: Stagger's spread at a strike: (240 · Stagger) div 16, held to half the distance to every neighbour (the
+    // voice's other strikes, and the section's edges) nearer than twice it.
+    auto spreadAt = [&](const Voice& v, const std::vector<std::int64_t>& strikes) -> std::int64_t {
+        std::int64_t spread = 240 * clampi(v.stagger, 0, 16) / 16;
+        if (spread <= 0) return 0;
+        const std::int64_t lo = strikes.front() - 2 * spread, hi = strikes.back() + 2 * spread;
+        std::vector<std::int64_t> ns = strikesIn(lo, hi);
+        ns.push_back(0);
+        if (w.endTick() >= 0) ns.push_back(w.endTick());
+        for (std::int64_t strike : strikes)
+            for (std::int64_t t : ns) {
+                const std::int64_t d = t > strike ? t - strike : strike - t;
+                if (d > 0 && d < 2 * spread) spread = std::min(spread, d / 2);
+            }
+        return spread;
+    };
+
+    // Pulse (v0.4): a chord on each hit the voice owns, for the hit's gate.
+    for (Step s = w.stepFrom(gi, from); s.nominal < to; s = w.after(gi, s)) {
+        if (!owned(s) || silent(s.bar) || voiceAt(s.bar).articulation != Articulation::Pulse) continue;
+        const GroupPlay& p = w.play(s.bar, gi);
+        const Voice& v = voiceAt(s.bar);
+        const int gatePercent = resolve(p.song(), p.group(), v).gatePercent;
+        const auto [root, major] = w.chordAt(s.tick);
+        const std::vector<int> chord = v.nearest ? voicedAt(w, gi, vi, s.tick) : chordNotes(p.song(), v, root, major);
+        const int n = p.repeats(s.bar, s.absStep);
+        std::vector<Repeat> rs;
+        if (n > 1) rs = ratchetOf(s, p.stepTicks(), n, gatePercent, hitVelocity(s), p.group().ramp);  // ratcheted (§4.6)
+        else rs.push_back({s.tick, s.tick + gateTicks(p.stepTicks(), p.gate(s.slot), gatePercent), hitVelocity(s)});
+        // §3.4b: every repeat is spread at the hit's offsets, the spread held inside the gaps around each of them.
+        std::vector<std::int64_t> off(chord.size(), 0);
+        if (v.stagger > 0) {
+            std::vector<std::int64_t> strikes;
+            for (const Repeat& r : rs) strikes.push_back(r.start);
+            off = staggerOffsets(p.song(), v, s.tick, chord, spreadAt(v, strikes));
+        }
+        for (const Repeat& r : rs)
+            for (std::size_t k = 0; k < chord.size(); ++k) {
+                const int note = chord[k];
+                const int vel = topVelocity(chord, note, r.velocity, v.top);
+                out.push_back({r.start + off[k], r.end + off[k], v.channel, note, humanVelocity(p.song(), v, s.nominal, note, vel), v.id});
+            }
+    }
+
+    // Sustain and Restrike: the chord holds from change to change. At a change, notes both chords share carry on;
+    // a restrike (a hit the voice owns), the start of each pass through the progression, and a re-anchored harmony
+    // strike everything afresh. So the walk starts at the fresh point at or before `from` and stops at the first fresh
+    // point whose notes all start at or after `to`, where every note started before `to` has ended.
     const State& st0 = w.state(w.barOf(from));
     const std::int64_t cycle0 = changeTicks(st0.song) * clampi(st0.song.harmony.length, 1, 16);
     const std::int64_t start = st0.harmonyAnchor + floorDiv(from - st0.harmonyAnchor, cycle0) * cycle0;
+    // Around starts a note up to half the largest spread (120 ticks) before its strike.
+    constexpr std::int64_t kEarliest = 240 / 2;
 
     std::map<int, std::pair<std::int64_t, int>> sounding;  // note → (start, velocity)
     int channel = voiceAt(w.barOf(start)).channel;
@@ -1075,28 +1163,45 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
     for (std::int64_t bar = w.barOf(start);; ++bar) {
         for (const Boundary& b : boundariesIn(bar)) {
             if (b.tick < start) continue;
-            if (b.fresh && b.tick >= to) {
-                closeAll(b.tick);
-                return;
-            }
             const Articulation a = voiceAt(bar).articulation;
             if (silent(bar) || a == Articulation::Pulse) {
                 closeAll(b.tick);
+                if (b.fresh && b.tick >= to) return;
                 continue;
             }
+            const Voice& v = voiceAt(bar);
+            const Song& song = w.state(bar).song;
             const auto [root, major] = w.chordAt(b.tick);
-            const std::vector<int> chord =
-                voiceAt(bar).nearest ? voicedAt(w, gi, vi, b.tick) : chordNotes(w.state(bar).song, voiceAt(bar), root, major);
-            std::vector<int> ending;
+            const std::vector<int> chord = v.nearest ? voicedAt(w, gi, vi, b.tick) : chordNotes(song, v, root, major);
+            std::vector<int> leaving, starting;  // both ascending
             for (const auto& kv : sounding)
-                if (b.fresh || !std::binary_search(chord.begin(), chord.end(), kv.first)) ending.push_back(kv.first);
-            for (int n : ending) close(n, b.tick);
-            channel = voiceAt(bar).channel;
-            id = voiceAt(bar).id;
+                if (b.fresh || !std::binary_search(chord.begin(), chord.end(), kv.first)) leaving.push_back(kv.first);
             for (int n : chord)
-                if (!sounding.count(n)) sounding[n] = {b.tick, humanVelocity(w.state(bar).song, voiceAt(bar), b.tick, n, b.velocity)};
+                if (b.fresh || !sounding.count(n)) starting.push_back(n);
+            // §3.4b: where each starting note starts, and where each leaving one lets go.
+            std::vector<std::int64_t> off(starting.size(), 0);
+            if (v.stagger > 0 && !starting.empty()) off = staggerOffsets(song, v, b.tick, starting, spreadAt(v, {b.tick}));
+            std::map<int, std::int64_t> startOf;
+            std::int64_t first = b.tick;
+            for (std::size_t k = 0; k < starting.size(); ++k) {
+                startOf[starting[k]] = b.tick + off[k];
+                first = k == 0 ? b.tick + off[k] : std::min(first, b.tick + off[k]);
+            }
+            for (std::size_t k = 0; k < leaving.size(); ++k) {
+                const int n = leaving[k];
+                std::int64_t end = leaving.size() == starting.size() ? b.tick + off[k] : first;
+                if (const auto it = startOf.find(n); it != startOf.end()) end = std::min(end, it->second);
+                close(n, end);
+            }
+            channel = v.channel;
+            id = v.id;
+            for (std::size_t k = 0; k < starting.size(); ++k) {
+                const int n = starting[k];
+                sounding[n] = {b.tick + off[k], humanVelocity(song, v, b.tick, n, topVelocity(chord, n, b.velocity, v.top))};
+            }
+            if (b.fresh && first >= to) return;  // everything before it has ended, and nothing of it is in the span
         }
-        if ((bar + 1) * w.barTicks() >= to) {
+        if ((bar + 1) * w.barTicks() >= to + kEarliest) {
             bool open = false;
             for (const auto& kv : sounding) open |= kv.second.first < to;
             if (!open) return;
@@ -1611,7 +1716,7 @@ public:
         }
         const bool frozen = held && hold_ >= 1 && bar >= hold_;
         const Section sec = sectionAt(song_, frozen ? hold_ - 1 : bar);
-        Letter& l = letter(sec, frozen ? hold_ - sec.start : -1);
+        Letter& l = letter(sec, frozen ? hold_ - sec.start : -1, frozen || sec.bars < 0 ? -1 : sec.bars);
         sp.world = l.world.get();
         sp.song = &l.song;
         sp.start = sec.start;
@@ -1662,13 +1767,15 @@ private:
         Song song;
         std::unique_ptr<World> world;
     };
-    Letter& letter(const Section& sec, std::int64_t hold) {
+    // `bars`: the section's length, −1 if it doesn't end (held, or the last letter on Hold). It's in the key only
+    // because Stagger reads the section's end (§3.4b); every World of one letter plays the same notes inside it.
+    Letter& letter(const Section& sec, std::int64_t hold, std::int64_t bars) {
         const std::int64_t pos = sec.entry.primed ? sec.position : -1;
-        auto& slot = letters_[std::make_tuple(sec.entry.letter, pos, hold)];
+        auto& slot = letters_[std::make_tuple(sec.entry.letter, pos, hold, bars)];
         if (!slot) {
             slot = std::make_unique<Letter>();
             slot->song = letterSong(song_, sec.entry, sec.position);
-            slot->world = std::make_unique<World>(slot->song, hold);
+            slot->world = std::make_unique<World>(slot->song, hold, bars);
         }
         return *slot;
     }
@@ -1683,7 +1790,7 @@ private:
     bool form_;
     std::int64_t bt_;
     std::unique_ptr<World> plain_, replay_;
-    std::map<std::tuple<char, std::int64_t, std::int64_t>, std::unique_ptr<Letter>> letters_;
+    std::map<std::tuple<char, std::int64_t, std::int64_t, std::int64_t>, std::unique_ptr<Letter>> letters_;
 };
 
 }  // namespace

@@ -158,6 +158,18 @@ static std::vector<Song> songs() {
     r.groups[1].probability = 85, r.groups[1].ratchet = 15, r.groups[1].repeats = 3, r.groups[1].fillEvery = 2, r.groups[1].fillBars = 4;
     r.groups[2].voices[0].articulation = Articulation::Pulse, r.groups[2].ratchet = 50, r.groups[2].fillNow = true;
     out.push_back(r);
+    // §3.4b: Stagger and Top on each articulation, both leans, every order, with swing and ratchets around them.
+    Song h = s;
+    h.groups[2].voices[0].stagger = 16, h.groups[2].voices[0].staggerOrder = StaggerOrder::Seeded;
+    h.groups[2].voices[0].staggerLean = StaggerLean::Around, h.groups[2].voices[0].top = 12;
+    out.push_back(h);
+    Song q = r;
+    q.groups[2].voices[0].stagger = 10, q.groups[2].voices[0].staggerOrder = StaggerOrder::Down, q.groups[2].voices[0].top = 16;
+    out.push_back(q);
+    Song n = defaultSong(0x5151);
+    n.groups[2].voices[0].stagger = 8, n.groups[2].voices[0].staggerLean = StaggerLean::Around, n.groups[2].voices[0].nearest = true;
+    n.groups[2].voices[0].top = 6, n.harmony.changesEvery = 0;
+    out.push_back(n);
     return out;
 }
 
@@ -1285,6 +1297,167 @@ static void nearestVoicing() {
     Row& r = addRow(m);
     r.scope = Scope::Voice, r.target = m.groups[2].voices[0].id, r.param = Param::VoiceLeading, r.every = 2, r.allowed = {1}, r.lasts = 1;
     CHECK(!stateAt(m, 1).groups[2].voices[0].nearest && stateAt(m, 2).groups[2].voices[0].nearest && !stateAt(m, 3).groups[2].voices[0].nearest);
+}
+
+// §3.4b: Stagger and Top. The spec's worked values (tools/spec_arith.py, "§3.4b Stagger" and "§3.4b Top"), the
+// rules around them (a held note doesn't move, a leaving note lets go at its partner's start, nothing crosses a
+// strike, a Pulse note keeps its length), replay, and off: bit for bit.
+static void staggerAndTop() {
+    // A song whose progression starts Cmaj7, G7, Am7: C major, the Chord voice at its default base, size 4, Voicing 1,
+    // Sustain, changes every bar.
+    Song base;
+    bool found = false;
+    for (std::uint64_t seed = 1; seed <= 4000 && !found; ++seed) {
+        Song s = defaultSong(seed * 0x9E3779B97F4A7C15ull);
+        s.matrix.clear();
+        s.root = 0, s.scale = 0;  // C major
+        s.harmony.length = 4, s.harmony.range = 16, s.harmony.wander = 16;
+        const std::int64_t bt = barTicks(s);
+        if (chordRootAt(s, 0) == 0 && chordRootAt(s, bt) == 7 && chordRootAt(s, 2 * bt) == 9) base = s, found = true;
+    }
+    CHECK(found);
+    if (!found) return;
+    const std::int64_t bt = barTicks(base);
+    const std::uint64_t cid = base.groups[2].voices[0].id;
+    auto voiceNotes = [&](const Song& s, std::int64_t from, std::int64_t to) {
+        std::vector<Note> out;
+        for (const Note& n : notes(s, from, to))
+            if (n.voice == cid) out.push_back(n);
+        return out;
+    };
+    auto startOf = [&](const std::vector<Note>& ns, int note, std::int64_t lo, std::int64_t hi) -> std::int64_t {
+        for (const Note& n : ns)
+            if (n.note == note && n.start >= lo && n.start < hi) return n.start;
+        return -1;
+    };
+    auto endOf = [&](const std::vector<Note>& ns, int note, std::int64_t lo, std::int64_t hi) -> std::int64_t {
+        for (const Note& n : ns)
+            if (n.note == note && n.end >= lo && n.end < hi) return n.end;
+        return -1;
+    };
+    auto with = [&](int S, StaggerOrder o, StaggerLean l, int top = 0) {
+        Song s = base;
+        Voice& cv = s.groups[2].voices[0];
+        cv.stagger = S, cv.staggerOrder = o, cv.staggerLean = l, cv.top = top;
+        return s;
+    };
+    const int C3 = 48, D3 = 50, E3 = 52, F3 = 53, G3 = 55, A3 = 57, B3 = 59;
+    {  // the chords themselves, as the worked values have them
+        const auto ns = voiceNotes(base, 0, 3 * bt);
+        CHECK(startOf(ns, C3, 0, 1) == 0 && startOf(ns, E3, 0, 1) == 0 && startOf(ns, G3, 0, 1) == 0 && startOf(ns, B3, 0, 1) == 0);
+        CHECK(startOf(ns, D3, bt, bt + 1) == bt && startOf(ns, F3, bt, bt + 1) == bt);
+        CHECK(startOf(ns, C3, 2 * bt, 2 * bt + 1) == 2 * bt && startOf(ns, E3, 2 * bt, 2 * bt + 1) == 2 * bt && startOf(ns, A3, 2 * bt, 2 * bt + 1) == 2 * bt);
+    }
+    const std::int64_t g = bt, a = 2 * bt;  // the changes to G7 and to Am7
+    {  // Cmaj7 → G7, Stagger 8, Up, Late: D3 +0, F3 +120; C3 lets go at +0, E3 at +120; G3 and B3 are held
+        const auto ns = voiceNotes(with(8, StaggerOrder::Up, StaggerLean::Late), 0, 3 * bt);
+        CHECK(startOf(ns, D3, g - 200, g + 300) == g + 0 && startOf(ns, F3, g - 200, g + 300) == g + 120);
+        CHECK(endOf(ns, C3, g - 200, g + 300) == g + 0 && endOf(ns, E3, g - 200, g + 300) == g + 120);
+        // G3 and B3 are held through the change: nothing of them starts or ends near it
+        CHECK(startOf(ns, G3, g - 200, g + 300) < 0 && endOf(ns, G3, g - 200, g + 300) < 0 && startOf(ns, B3, g - 200, g + 300) < 0);
+        // → Am7: C3 +0, E3 +60, A3 +120
+        CHECK(startOf(ns, C3, a - 200, a + 300) == a + 0 && startOf(ns, E3, a - 200, a + 300) == a + 60 && startOf(ns, A3, a - 200, a + 300) == a + 120);
+        // the fresh strike of Cmaj7 at the song's start: C3 +0 E3 +40 G3 +80 B3 +120
+        CHECK(startOf(ns, C3, 0, 200) == 0 && startOf(ns, E3, 0, 200) == 40 && startOf(ns, G3, 0, 200) == 80 && startOf(ns, B3, 0, 200) == 120);
+    }
+    {  // Around: D3 −60, F3 +60, C3 lets go at −60, E3 at +60; → Am7: C3 −60, E3 +0, A3 +60; at the start, as Late
+        const auto ns = voiceNotes(with(8, StaggerOrder::Up, StaggerLean::Around), 0, 3 * bt);
+        CHECK(startOf(ns, D3, g - 200, g + 300) == g - 60 && startOf(ns, F3, g - 200, g + 300) == g + 60);
+        CHECK(endOf(ns, C3, g - 200, g + 300) == g - 60 && endOf(ns, E3, g - 200, g + 300) == g + 60);
+        CHECK(startOf(ns, C3, a - 200, a + 300) == a - 60 && startOf(ns, E3, a - 200, a + 300) == a + 0 && startOf(ns, A3, a - 200, a + 300) == a + 60);
+        CHECK(startOf(ns, C3, 0, 200) == 0 && startOf(ns, B3, 0, 200) == 120);
+        // a span that ends just before a change still has the notes Around starts before it
+        const auto part = voiceNotes(with(8, StaggerOrder::Up, StaggerLean::Around), g - 100, g);
+        CHECK(part.size() == 1 && part[0].note == D3 && part[0].start == g - 60);
+    }
+    {  // Stagger 16: D3 +0, F3 +240. Down at the start: B3 +0 G3 +80 E3 +160 C3 +240
+        const auto ns = voiceNotes(with(16, StaggerOrder::Up, StaggerLean::Late), 0, 3 * bt);
+        CHECK(startOf(ns, D3, g - 200, g + 300) == g && startOf(ns, F3, g - 200, g + 300) == g + 240);
+        const auto dn = voiceNotes(with(8, StaggerOrder::Down, StaggerLean::Late), 0, bt);
+        CHECK(startOf(dn, B3, 0, 200) == 0 && startOf(dn, G3, 0, 200) == 40 && startOf(dn, E3, 0, 200) == 80 && startOf(dn, C3, 0, 200) == 120);
+    }
+    {  // Seeded: the four places of a fresh strike, in the seed's order, the same on every replay, and kept by Generate
+        Song s = with(8, StaggerOrder::Seeded, StaggerLean::Late);
+        const auto ns = voiceNotes(s, 0, bt);
+        std::set<std::int64_t> at;
+        for (int n : {C3, E3, G3, B3}) at.insert(startOf(ns, n, 0, 200));
+        CHECK(at == (std::set<std::int64_t>{0, 40, 80, 120}));
+        CHECK(voiceNotes(s, 0, bt) == ns);
+        Song r = s;
+        r.groups[2].voices[0].pitchSeed ^= 0x5555;  // a new pitch seed: the same chords here, the same hand
+        CHECK(voiceNotes(r, 0, bt) == ns);
+    }
+    {  // Restrike hits every 1/16 (gap 240), Stagger 16: the spread is held to 120. Nothing crosses a strike.
+        Song s = with(16, StaggerOrder::Up, StaggerLean::Late);
+        Group& cg = s.groups[2];
+        cg.steps = 16, cg.density = 16, cg.probability = 100, cg.swing = 0;
+        cg.voices[0].articulation = Articulation::RestrikeHits;
+        const auto ns = voiceNotes(s, 0, 2 * bt);
+        std::map<std::int64_t, std::vector<int>> byStart;
+        for (const Note& n : ns) byStart[n.start].push_back(n.note);
+        // a restrike inside the first bar, not on a change: Cmaj7 rolled over 120
+        const std::int64_t t = 4 * 240;
+        CHECK(startOf(ns, C3, t, t + 1) == t && startOf(ns, E3, t, t + 240) == t + 40 && startOf(ns, G3, t, t + 240) == t + 80 &&
+              startOf(ns, B3, t, t + 240) == t + 120);
+        bool inside = true;
+        for (const Note& n : ns) inside = inside && n.start % 240 <= 120;
+        CHECK(inside);
+    }
+    {  // Top on Cmaj7 at velocity v: Top 8 → C3 v, E3 v−4, G3 v−4, B3 v+8; Top 16 → +16 / −8
+        const auto off = voiceNotes(base, 0, 1);
+        CHECK(off.size() == 4);
+        const int v0 = off.empty() ? 0 : off[0].velocity;
+        for (int T : {8, 16}) {
+            const auto ns = voiceNotes(with(0, StaggerOrder::Up, StaggerLean::Late, T), 0, 1);
+            std::map<int, int> vel;
+            for (const Note& n : ns) vel[n.note] = n.velocity;
+            CHECK(vel[C3] == v0 && vel[E3] == v0 - T / 2 && vel[G3] == v0 - T / 2 && vel[B3] == std::min(127, v0 + T));
+        }
+    }
+    {  // Pulse: every note keeps its length, moved by its offset, and plays the same notes
+        Song p0 = base;
+        p0.groups[2].voices[0].articulation = Articulation::Pulse;
+        p0.groups[2].density = 8;
+        Song p1 = p0;
+        p1.groups[2].voices[0].stagger = 12;
+        const auto a0 = voiceNotes(p0, 0, 8 * bt), a1 = voiceNotes(p1, 0, 8 * bt);
+        std::multiset<std::tuple<int, std::int64_t>> l0, l1;
+        for (const Note& n : a0) l0.insert({n.note, n.end - n.start});
+        for (const Note& n : a1) l1.insert({n.note, n.end - n.start});
+        CHECK(!a0.empty() && l0 == l1);
+        bool moved = false;
+        for (const Note& n : a1) moved = moved || n.start % 60 != 0;
+        CHECK(moved || a1 != a0);
+    }
+    {  // Replay: a span on its own is the notes of the whole that start in it, Around and Seeded included
+        for (StaggerLean l : {StaggerLean::Late, StaggerLean::Around}) {
+            Song s = with(11, StaggerOrder::Seeded, l, 5);
+            s.groups[2].voices[0].articulation = Articulation::RestrikeAccents;
+            std::vector<Note> whole;
+            for (const Note& n : voiceNotes(s, 0, 12 * bt))
+                if (n.start >= 5 * bt - 7) whole.push_back(n);
+            CHECK(whole == voiceNotes(s, 5 * bt - 7, 12 * bt));
+        }
+    }
+    {  // Off: Order, Lean at Stagger 0 and Top 0 change nothing, bit for bit
+        Song s = with(0, StaggerOrder::Seeded, StaggerLean::Around, 0);
+        CHECK(notes(s, 0, 16 * bt) == notes(base, 0, 16 * bt));
+    }
+    // The change matrix: Stagger and Top numeric, Order and Lean pick-one, by their keys.
+    CHECK(std::string(paramKey(Param::Stagger)) == "stagger" && std::string(paramKey(Param::StaggerOrder)) == "staggerOrder" &&
+          std::string(paramKey(Param::StaggerLean)) == "staggerLean" && std::string(paramKey(Param::Top)) == "top");
+    CHECK(isNumericParam(Param::Stagger) && isNumericParam(Param::Top) && isPickParam(Param::StaggerOrder) && isPickParam(Param::StaggerLean));
+    CHECK(levelMayDrive("stagger") && levelMayDrive("top") && !levelMayDrive("staggerOrder"));
+    Song m = base;
+    Row& r = addRow(m);
+    r.scope = Scope::Voice, r.target = cid, r.param = Param::Stagger, r.every = 2, r.maxShift = 4, r.min = 0, r.max = 16;
+    bool walks = false;
+    for (std::int64_t b = 2; b <= 24; b += 2) walks = walks || stateAt(m, b).groups[2].voices[0].stagger > 0;
+    CHECK(stateAt(m, 1).groups[2].voices[0].stagger == 0 && walks);
+    m.groups[2].voices[0].stagger = 99, m.groups[2].voices[0].top = -3;
+    m.groups[2].voices[0].staggerOrder = static_cast<StaggerOrder>(7);
+    sanitize(m);
+    CHECK(m.groups[2].voices[0].stagger == 16 && m.groups[2].voices[0].top == 0 && m.groups[2].voices[0].staggerOrder == StaggerOrder::Seeded);
 }
 
 // §4.7: humanize. Off, nothing moves. On, a voice's notes keep their pitches and order, move by up to ±Velocity, and
@@ -3444,6 +3617,7 @@ int main() {
     colour();
     modeMoves();
     nearestVoicing();
+    staggerAndTop();
     humanize();
     evolve();
     nextFirings();

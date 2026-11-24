@@ -38,6 +38,8 @@ enum class DealMode { OnGenerate, EveryCycle, RoundRobin, Solo, Alea, Series, Gr
 enum class Overlap { Ring, Cut };
 enum class Direction { Forward, Backward, Pendulum };
 enum class Articulation { Sustain, RestrikeAccents, RestrikeHits, Pulse };
+enum class StaggerOrder { Up, Down, Seeded };  // §3.4b: lowest first, highest first, the master seed's
+enum class StaggerLean { Late, Around };       // §3.4b: from the strike on, or half before it and half after
 
 // §16: a slot holds one generator, by name, and the parameters of every generator it has had (so swapping away and
 // back brings a generator's knobs back). An empty or unknown `use` plays the slot's default. `extra` is what this
@@ -79,6 +81,12 @@ struct Voice {
     // sounds late by up to humanTiming % (0–100) of the room left in its step. Its own stream, so Generate keeps it.
     int humanVelocity = 0;
     int humanTiming = 0;
+    // §3.4b, Chord only, both off at 0: Stagger (0–16) spreads the notes a chord strikes over up to a 1/16 note, in
+    // Order, from the strike on or Around it; Top (0–16) puts the chord's top note +Top and its inner notes −Top/2.
+    int stagger = 0;
+    StaggerOrder staggerOrder = StaggerOrder::Up;
+    StaggerLean staggerLean = StaggerLean::Late;
+    int top = 0;
     // Lead, Bass (§4.3)
     bool tie = false;
     bool lockNotes = false;  // Generate leaves its pitch seed alone (§2.2)

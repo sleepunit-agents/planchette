@@ -155,7 +155,7 @@ std::vector<std::pair<Dest, int>> letterValues(const Song& a, const Song& x) {
             for (const Voice& v : ga->voices)
                 if (v.id == vx.id) va = &v;
             if (!va) continue;
-            for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming"})
+            for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top"})
                 put(Scope::Voice, vx.id, key);
             overrides(Scope::Voice, vx.id, va->overrides, vx.overrides);
             if (vx.type != VoiceType::Chord) generators(Scope::Voice, vx.id, SlotKind::Notes, va->notesGen, vx.notesGen);
@@ -184,7 +184,7 @@ void keepValues(const Song& from, Song& to) {
             for (Voice& vt : gt.voices)
                 for (const Voice& vf : gf.voices) {
                     if (vf.id != vt.id) continue;
-                    for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming"})
+                    for (const char* key : {"weight", "density", "voicing", "chordSize", "articulation", "nearest", "humanVelocity", "humanTiming", "stagger", "staggerOrder", "staggerLean", "top"})
                         copy(Scope::Voice, vt.id, key);
                     vt.overrides = vf.overrides;
                     vt.notesGen.params = vf.notesGen.params;

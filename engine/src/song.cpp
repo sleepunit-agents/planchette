@@ -239,6 +239,10 @@ void sanitize(Song& s) {
             v.articulation = clampEnum(v.articulation, 3);
             v.humanVelocity = clamp(v.humanVelocity, 0, 32);
             v.humanTiming = clamp(v.humanTiming, 0, 100);
+            v.stagger = clamp(v.stagger, 0, 16);
+            v.staggerOrder = clampEnum(v.staggerOrder, 2);
+            v.staggerLean = clampEnum(v.staggerLean, 1);
+            v.top = clamp(v.top, 0, 16);
             clampOverrides(v.overrides);
         }
     }

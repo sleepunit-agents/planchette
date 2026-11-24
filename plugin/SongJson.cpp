@@ -545,6 +545,11 @@ juce::var toVar(const Song& s) {
             vo->setProperty("nearest", v.nearest);
             vo->setProperty("humanVelocity", v.humanVelocity);
             vo->setProperty("humanTiming", v.humanTiming);
+            // §3.4b: written only when they aren't the default, so a song that doesn't use them is the file it was
+            if (v.stagger != 0) vo->setProperty("stagger", v.stagger);
+            if (v.staggerOrder != StaggerOrder::Up) vo->setProperty("staggerOrder", static_cast<int>(v.staggerOrder));
+            if (v.staggerLean != StaggerLean::Late) vo->setProperty("staggerLean", static_cast<int>(v.staggerLean));
+            if (v.top != 0) vo->setProperty("top", v.top);
             vo->setProperty("tie", v.tie);
             vo->setProperty("lockNotes", v.lockNotes);
             if (v.density != 8) vo->setProperty("density", v.density);  // §5.8: written only when it isn't the default
@@ -683,6 +688,10 @@ Song fromVar(const juce::var& v) {
                     x.nearest = flag(vo, "nearest", false);  // §3.4a: a song from before it, the fixed Voicing
                     x.humanVelocity = num(vo, "humanVelocity", 0);  // §4.7: and no humanize
                     x.humanTiming = num(vo, "humanTiming", 0);
+                    x.stagger = num(vo, "stagger", 0);  // §3.4b: a song from before it, a block chord at one velocity
+                    x.staggerOrder = static_cast<StaggerOrder>(num(vo, "staggerOrder", 0));
+                    x.staggerLean = static_cast<StaggerLean>(num(vo, "staggerLean", 0));
+                    x.top = num(vo, "top", 0);
                     x.tie = flag(vo, "tie", false);
                     x.lockNotes = flag(vo, "lockNotes", false);
                     x.density = num(vo, "density", 8);

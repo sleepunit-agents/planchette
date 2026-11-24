@@ -43,6 +43,8 @@ int main() {
     s.groups[2].voices[0].articulation = Articulation::RestrikeAccents;
     s.groups[2].voices[0].voicing = 11;
     s.groups[2].voices[0].nearest = true;
+    s.groups[2].voices[0].stagger = 9, s.groups[2].voices[0].staggerOrder = StaggerOrder::Seeded;  // §3.4b
+    s.groups[2].voices[0].staggerLean = StaggerLean::Around, s.groups[2].voices[0].top = 7;
     s.groups[0].voices[0].humanVelocity = 12, s.groups[0].voices[0].humanTiming = 70;
     Row& r1 = addRow(s);
     r1.scope = Scope::Global, r1.param = Param::Range, r1.every = 2, r1.maxShift = 3, r1.min = 4, r1.max = 12, r1.chance = 70;
@@ -82,7 +84,10 @@ int main() {
                           back.groups[3].voices[1].notesGen.params.at("kotekan").at("mode") == 3 &&
                           back.groups[1].rhythmGen.sources.at("interlock") == back.groups[0].id && kotekanSource(back, 3, 1).has_value() &&
                           back.groups[0].deal == DealMode::Bells && back.groups[0].handoff == 33 && back.groups[2].deal == DealMode::Tutti &&
-                          back.groups[1].handoff == 10 && back.groups[0].cleanHandoffs && !back.groups[1].cleanHandoffs;
+                          back.groups[1].handoff == 10 && back.groups[0].cleanHandoffs && !back.groups[1].cleanHandoffs &&
+                          back.groups[2].voices[0].stagger == 9 && back.groups[2].voices[0].staggerOrder == StaggerOrder::Seeded &&
+                          back.groups[2].voices[0].staggerLean == StaggerLean::Around && back.groups[2].voices[0].top == 7 &&
+                          back.groups[1].voices[0].stagger == 0 && back.groups[1].voices[0].top == 0;
     std::printf("%zu notes over 32 bars; round trip: notes %s, JSON %s (%d bytes)\n", notes(s, 0, end).size(),
                 sameNotes ? "identical" : "DIFFER", sameText ? "identical" : "DIFFERS", text.length());
 
