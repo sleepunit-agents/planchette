@@ -39,18 +39,23 @@ enum class Param {
     CleanHandoffs,
     // §3.4b, appended: numeric, pick-one (Up / Down / Seeded), pick-one (Late / Around), numeric, of a Chord voice
     Stagger, StaggerOrder, StaggerLean, Top,
+    // §4.8, appended: numeric ×3 and pick-one (All / Accents) of the harmony; pick-one (Off / On) of a voice, pick-one
+    // (Own hits / Source) of a Chord voice
+    PushAmount, PushEarly, PushLate, PushHits, OnGrid, StrikeWith,
 };
 // The last param there is: new ones go after it, and this moves with them.
-constexpr Param kLastParam = Param::Top;
+constexpr Param kLastParam = Param::StrikeWith;
 
 // What kind of target a row's param is (§7.2).
 inline bool isNumericParam(Param p) {
     return p <= Param::Length || (p >= Param::Probability && p <= Param::Repeats) || p == Param::HumanVelocity || p == Param::HumanTiming ||
-           p == Param::Handoff || p == Param::Stagger || p == Param::Top;
+           p == Param::Handoff || p == Param::Stagger || p == Param::Top ||
+           (p >= Param::PushAmount && p <= Param::PushLate);
 }
 inline bool isPickParam(Param p) { return (p >= Param::SoloMember && p <= Param::ChangesEvery) || p == Param::Fill || p == Param::ModeMoves ||
                                      p == Param::VoiceLeading || p == Param::CleanHandoffs ||
-                                     p == Param::StaggerOrder || p == Param::StaggerLean; }
+                                     p == Param::StaggerOrder || p == Param::StaggerLean ||
+                                     (p >= Param::PushHits && p <= Param::StrikeWith); }
 
 // §17.2: every destination's key. The params above by their number; a generator's parameter as slot.generator.key
 // ("rhythm.euclid.pulses", "notes.register.lock"), which has no number.

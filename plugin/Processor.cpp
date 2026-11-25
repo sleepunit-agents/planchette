@@ -200,6 +200,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout layout() {
         choice("fill", "Fill", {"Off", "On"}, d.fill),
         // §3.8: the harmony leans on the mode's own move and keeps out of the relative major (with Colour above 0).
         choice("moves", "Mode moves", {"Off", "On"}, d.modeMoves),
+        // §4.8: how many of the harmony's changes go where the Push source's riff goes (nothing without a source).
+        number("pushAmount", "Push amount", 0, 16, d.harmony.push.amount),
         // §9.2: Freeze holds what you hear (a live input, never part of the song). A jump switches it off.
         choice("freeze", "Freeze", {"Off", "On"}, 0),
     };
@@ -219,7 +221,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout layout() {
 }
 
 const char* const kParamIds[] = {"root", "scale", "chordEvery", "chordRange", "chordWander", "chordLength", "range",
-                                  "wander", "accent", "gate", "octaveLow", "octaveHigh", "colour", "jumps", "fill", "moves"};
+                                  "wander", "accent", "gate", "octaveLow", "octaveHigh", "colour", "jumps", "fill", "moves", "pushAmount"};
 
 }  // namespace
 
@@ -278,6 +280,7 @@ void eachParam(hocket::Song& s, F f) {
     f("jumps", s.octaveJumps);
     f("fill", s.fill);
     f("moves", s.modeMoves);
+    f("pushAmount", s.harmony.push.amount);
 }
 }  // namespace
 

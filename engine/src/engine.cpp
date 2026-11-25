@@ -344,6 +344,8 @@ public:
         for (const Group& g : song.groups) tihai_ = tihai_ || g.tihai > 0 || g.tihaiNow;
         for (const Row& r : song.matrix) tihai_ = tihai_ || r.key == "tihai";
         for (const Cord& c : song.mod.cords) tihai_ = tihai_ || c.dest.key == "tihai";
+        // §4.8: only a song with a Push source looks for arrivals; without one, nothing is drawn.
+        push_ = song.harmony.push.source != 0;
     }
 
     std::int64_t barTicks() const { return barTicks_; }
@@ -525,7 +527,93 @@ public:
         plays_.erase(plays_.begin(), plays_.lower_bound({bar, 0}));
         for (auto it = heard_.begin(); it != heard_.end();) it = it->first.second < bar * barTicks_ ? heard_.erase(it) : std::next(it);
         progressions_.erase(progressions_.begin(), progressions_.lower_bound(bar));
+        arrivals_.erase(arrivals_.begin(), arrivals_.lower_bound((bar - 4) * barTicks_));
     }
+
+    // ---- Push (§4.8) ----------------------------------------------------------------------------------------
+
+    bool pushOn() const { return push_; }
+    // The change on the grid at or before a tick (§4.5): the harmony's anchor plus a whole number of changes.
+    std::int64_t gridChange(std::int64_t tick) {
+        tick = std::max<std::int64_t>(0, tick);
+        const State& st = state(barOf(tick));
+        const std::int64_t ct = changeTicks(st.song);
+        return st.harmonyAnchor + floorDiv(tick - st.harmonyAnchor, ct) * ct;
+    }
+    // The next change on the grid after G: G + a change, or the harmony's next anchor if that's sooner.
+    std::int64_t nextChange(std::int64_t G) {
+        const State& st = state(barOf(G));
+        const std::int64_t n = G + changeTicks(st.song), A = st.harmonyAnchor;
+        for (std::int64_t b = barOf(G) + 1; b * barTicks_ < n; ++b)
+            if (state(b).harmonyAnchor != A) return b * barTicks_;
+        return n;
+    }
+    // The live Push source in a bar's state (§16.6's rule: a group in the song, not on Resultant), if there is one.
+    std::optional<std::size_t> pushSource(std::int64_t bar) {
+        if (!push_) return std::nullopt;
+        const Song& song = state(bar).song;
+        const std::uint64_t id = song.harmony.push.source;
+        for (std::size_t gi = 0; gi < song.groups.size(); ++gi)
+            if (song.groups[gi].id == id) return resultantSource(song, gi) ? std::nullopt : std::optional<std::size_t>(gi);
+        return std::nullopt;
+    }
+    // A source's step as Push reads it (§4.8, §16.6): on its own grid, before Jitter, never asking a deal.
+    struct SourceStep {
+        std::int64_t bar, absStep, nominal, tick, stepTicks;
+        int slot;
+        bool plays, accent;
+    };
+    std::vector<SourceStep> sourceSteps(std::size_t gi, std::int64_t from, std::int64_t to) {  // grid ticks in [from, to)
+        std::vector<SourceStep> out;
+        from = std::max<std::int64_t>(0, from);
+        for (std::int64_t bar = barOf(from); bar * barTicks_ < to; ++bar) {
+            const GroupPlay& p = play(bar, gi);
+            const Group& g = p.group();
+            const int L = clampi(g.steps, 1, 64);
+            for (std::int64_t a = ceilDiv(std::max(from, bar * barTicks_) - p.anchor(), p.stepTicks());; ++a) {
+                const std::int64_t at = p.anchor() + a * p.stepTicks();
+                if (at >= to || at >= (bar + 1) * barTicks_) break;
+                SourceStep x{bar, a, at, at + ((a & 1) ? (g.swing * p.stepTicks()) / 200 : 0), p.stepTicks(),
+                             slotAt(a, L, g.direction, g.offset), false, false};
+                x.plays = p.hitAt(a, x.slot) && p.plays(bar, a);
+                x.accent = p.accent(x.slot);
+                if (tihai_) {  // §18.4, as make() reads it
+                    const auto [role, src] = tihaiRole(bar, gi, a);
+                    if (role == Role::Gap) x.plays = false;
+                    if (role == Role::Land) x.plays = x.accent = true;
+                    if (role == Role::Phrase && src != a) {
+                        const std::int64_t cb = std::max<std::int64_t>(0, barOf(p.anchor() + src * p.stepTicks()));
+                        const GroupPlay& c = play(cb, gi);
+                        const int cs = slotAt(src, L, c.group().direction, c.group().offset);
+                        x.plays = c.hitAt(src, cs) && c.plays(cb, src);
+                        x.accent = c.accent(cs);
+                    }
+                }
+                out.push_back(x);
+            }
+        }
+        return out;
+    }
+    // §4.8: the tick the change on grid tick G is heard from.
+    std::int64_t arrival(std::int64_t G) {
+        if (!push_) return G;
+        if (const auto it = arrivals_.find(G); it != arrivals_.end()) return it->second;
+        const std::int64_t at = arrivalOf(G);
+        arrivals_[G] = at;
+        return at;
+    }
+    // Where a voice reads the harmony at a tick: the tick itself, unless Push has moved the change heard there.
+    // Then a tick in the change it belongs to: an early arrival's own grid tick (its bar's state, §4.8), or, for a
+    // change that hasn't arrived yet, the last tick of the one before it (the chord as it was struck).
+    std::int64_t heardTick(std::int64_t tick, bool onGrid) {
+        if (!push_ || onGrid) return tick;
+        tick = std::max<std::int64_t>(0, tick);
+        const std::int64_t G = gridChange(tick), N = nextChange(G);
+        if (arrival(N) <= tick) return N;
+        if (arrival(G) <= tick || G == 0) return tick;
+        return G - 1;
+    }
+    std::pair<int, bool> chordHeard(std::int64_t tick, bool onGrid) { return chordAt(heardTick(tick, onGrid)); }
 
     // §4.5: the current chord's root at a tick.
     int chordRoot(std::int64_t tick) { return chordAt(tick).first; }
@@ -659,6 +747,39 @@ private:
         std::vector<int> roots;  // harmonyRanked
     };
     std::map<std::int64_t, Progression> progressions_;
+    bool push_ = false;
+    std::map<std::int64_t, std::int64_t> arrivals_;  // grid tick → arrival (§4.8)
+
+    std::int64_t arrivalOf(std::int64_t G) {
+        const std::int64_t bar = barOf(G);
+        const State& st = state(bar);
+        const Harmony::Push& push = st.song.harmony.push;
+        if (G == st.harmonyAnchor) return G;  // the song's, a section's or a re-anchored harmony's first change
+        if (end_ >= 0 && G >= end_) return G;  // the next section's first change: no push into a new letter (§18.1)
+        const auto src = pushSource(bar);
+        if (!src) return G;
+        const std::int64_t ct = changeTicks(st.song);
+        const std::int64_t k = floorMod(floorDiv(G - st.harmonyAnchor, ct), clampi(st.song.harmony.length, 1, 16));
+        if (roll(hash(st.song.harmony.seed, {"push", k})) >= (100 * clampi(push.amount, 0, 16)) / 16) return G;
+        const Group& sg = st.song.groups[*src];
+        const std::int64_t stp = stepTicksIn(st, sg), swing = clampi(sg.swing, 0, 100) * stp / 200;
+        std::int64_t Dl = nextChange(G) - G;  // to the next change, or the next anchor if that's sooner
+        if (end_ >= 0 && end_ > G) Dl = std::min(Dl, end_ - G);  // the section's end is an anchor too (§18.1)
+        const std::int64_t reachE = std::max<std::int64_t>(0, (ct / 2 - 1 - swing) / stp);
+        const std::int64_t reachL = std::max<std::int64_t>(0, (Dl / 2 - 1 - swing) / stp);
+        const std::int64_t E = std::min<std::int64_t>(clampi(push.early, 0, 4), reachE);
+        const std::int64_t L = std::min<std::int64_t>(clampi(push.late, 0, 4), reachL);
+        const bool accents = push.hits == PushHits::Accents;
+        const std::vector<SourceStep> near = sourceSteps(*src, G - E * stp, G + L * stp + 1);
+        auto counts = [&](const SourceStep& x) { return x.plays && (!accents || x.accent); };
+        for (const SourceStep& x : near)
+            if (x.nominal == G && counts(x)) return x.tick;  // the riff plays the 1
+        for (auto it = near.rbegin(); it != near.rend(); ++it)
+            if (it->nominal < G && counts(*it)) return it->tick;  // the nearest hit before it
+        for (const SourceStep& x : near)
+            if (x.nominal > G && counts(x)) return x.tick;  // else the first after it
+        return G;
+    }
 };
 
 bool GroupPlay::hitAt(std::int64_t absStep, int slot) const {
@@ -742,7 +863,7 @@ int linePitch(World& w, std::size_t gi, int vi, const Step& s, int forcePos = -1
     const Group& g = p.group();
     const Voice& v = g.voices[vi];
     const Resolved r = resolve(song, g, v);
-    const auto [root, major] = w.chordAt(s.tick);
+    const auto [root, major] = w.chordHeard(s.tick, v.onGrid);  // §4.8: where Push has the change, unless on the grid
     const int centre = p.tonic(vi) ? song.root : root;  // Pedal measures from the key's tonic (§16.5)
     const std::vector<int> rk = lineRanked(song, centre);
     const int pos = clampi(forcePos >= 0 ? forcePos : p.position(vi, s.absStep, s.slot), 0, std::min(p.pool(vi), static_cast<int>(rk.size())) - 1);
@@ -758,11 +879,15 @@ int linePitch(World& w, std::size_t gi, int vi, const Step& s, int forcePos = -1
             const int mode = paramValue(SlotKind::Notes, v.notesGen, "kotekan", "mode");
             bool anticipate = false;
             int nextRoot = root;
-            if (mode == 3) {  // Nyok cok: the next change, and whether it's within Lead-in steps
+            if (mode == 3 && (!w.pushOn() || v.onGrid)) {  // Nyok cok: the next change, and whether it's within Lead-in steps
                 const State& st = w.state(s.bar);
                 const std::int64_t ct = changeTicks(st.song);
                 const std::int64_t next = st.harmonyAnchor + (floorDiv(s.nominal - st.harmonyAnchor, ct) + 1) * ct;
                 anticipate = next - s.nominal <= paramValue(SlotKind::Notes, v.notesGen, "kotekan", "lead") * p.stepTicks();
+                nextRoot = w.chordAt(next).first;
+            } else if (mode == 3) {  // §4.8: the next change as it arrives, from the one heard at this step
+                const std::int64_t next = w.nextChange(w.gridChange(w.heardTick(s.tick, false)));
+                anticipate = w.arrival(next) - s.nominal <= paramValue(SlotKind::Notes, v.notesGen, "kotekan", "lead") * p.stepTicks();
                 nextRoot = w.chordAt(next).first;
             }
             const Voice& av = w.play(a.bar, src->first).group().voices[static_cast<std::size_t>(src->second)];
@@ -1033,6 +1158,19 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
     };
     auto owned = [&](const Step& s) { return s.valid && s.hit && (s.owner == vi || (s.owner == kTutti && w.play(s.bar, gi).member(vi))); };
     auto silent = [&](std::int64_t bar) { return w.play(bar, gi).group().mute || voiceAt(bar).mute; };
+    // §4.8, Strike with: Source: the voice's restrikes and pulses come from the live Push source's steps that play.
+    auto strikeSource = [&](std::int64_t bar) -> std::optional<std::size_t> {
+        return voiceAt(bar).strikeWith == StrikeWith::Source ? w.pushSource(bar) : std::nullopt;
+    };
+    auto sourceVelocity = [&](std::int64_t bar, const World::SourceStep& x) {
+        return x.accent ? accentVelocity(accentOf(bar)) : normalVelocity(accentOf(bar));
+    };
+    // The chord the voice strikes at a tick (§4.5, §3.4a), read where Push has the harmony (§4.8).
+    auto chordFor = [&](const Song& song, const Voice& v, std::int64_t tick) {
+        const std::int64_t at = w.heardTick(tick, v.onGrid);
+        const auto [root, major] = w.chordAt(at);
+        return v.nearest ? voicedAt(w, gi, vi, at) : chordNotes(song, v, root, major);
+    };
 
     // Sustain and Restrike: where the chord is struck in a bar. A change (fresh at the start of each pass through the
     // progression, and at a re-anchored harmony) or a restrike (a hit the voice owns).
@@ -1045,17 +1183,31 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
     auto boundariesIn = [&](std::int64_t bar) -> const std::vector<Boundary>& {
         if (auto it = boundaryCache.find(bar); it != boundaryCache.end()) return it->second;
         std::vector<Boundary> bs;
-        const State& st = w.state(bar);
-        const std::int64_t ct = changeTicks(st.song);
-        const std::int64_t cycle = ct * clampi(st.song.harmony.length, 1, 16);
         const std::int64_t b0 = bar * w.barTicks(), b1 = (bar + 1) * w.barTicks();
-        for (std::int64_t t = st.harmonyAnchor + ceilDiv(b0 - st.harmonyAnchor, ct) * ct; t < b1; t += ct)
-            bs.push_back({t, floorMod(t - st.harmonyAnchor, cycle) == 0, normalVelocity(accentOf(bar))});
+        // The changes that sound in this bar: on the grid, or (§4.8) where they arrive, from up to half a change
+        // (two bars at most) either side.
+        const std::int64_t reach = w.pushOn() ? 2 : 0;
+        for (std::int64_t gb = std::max<std::int64_t>(0, bar - reach); gb <= bar + reach; ++gb) {
+            const State& st = w.state(gb);
+            const std::int64_t ct = changeTicks(st.song);
+            const std::int64_t cycle = ct * clampi(st.song.harmony.length, 1, 16);
+            const std::int64_t g0 = gb * w.barTicks(), g1 = (gb + 1) * w.barTicks();
+            for (std::int64_t t = st.harmonyAnchor + ceilDiv(g0 - st.harmonyAnchor, ct) * ct; t < g1; t += ct) {
+                const std::int64_t at = voiceAt(gb).onGrid ? t : w.arrival(t);
+                if (at >= b0 && at < b1) bs.push_back({at, floorMod(t - st.harmonyAnchor, cycle) == 0, normalVelocity(accentOf(bar))});
+            }
+        }
         const Articulation a = voiceAt(bar).articulation;
-        if (a == Articulation::RestrikeHits || a == Articulation::RestrikeAccents)
-            for (Step s = w.stepFrom(gi, b0); s.nominal < b1; s = w.after(gi, s))
-                if (owned(s) && (a == Articulation::RestrikeHits || w.play(s.bar, gi).accent(s.slot)))
-                    bs.push_back({s.tick, true, hitVelocity(s)});
+        if (a == Articulation::RestrikeHits || a == Articulation::RestrikeAccents) {
+            if (const auto src = strikeSource(bar)) {
+                for (const World::SourceStep& x : w.sourceSteps(*src, b0, b1))
+                    if (x.plays && (a == Articulation::RestrikeHits || x.accent)) bs.push_back({x.tick, true, sourceVelocity(bar, x)});
+            } else {
+                for (Step s = w.stepFrom(gi, b0); s.nominal < b1; s = w.after(gi, s))
+                    if (owned(s) && (a == Articulation::RestrikeHits || w.play(s.bar, gi).accent(s.slot)))
+                        bs.push_back({s.tick, true, hitVelocity(s)});
+            }
+        }
         std::stable_sort(bs.begin(), bs.end(), [](const Boundary& x, const Boundary& y) { return x.tick < y.tick; });
         // A restrike on a change is one boundary: fresh, at the hit's velocity.
         std::vector<Boundary> merged;
@@ -1081,6 +1233,11 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
                 continue;
             }
             const std::int64_t b0 = bar * w.barTicks(), b1 = (bar + 1) * w.barTicks();
+            if (const auto src = strikeSource(bar)) {  // §4.8: one strike per source step that plays
+                for (const World::SourceStep& x : w.sourceSteps(*src, b0, b1))
+                    if (x.plays) ts.push_back(x.tick);
+                continue;
+            }
             for (Step s = w.stepFrom(gi, b0); s.nominal < b1; s = w.after(gi, s)) {
                 if (!owned(s)) continue;
                 const GroupPlay& p = w.play(s.bar, gi);
@@ -1112,12 +1269,11 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
 
     // Pulse (v0.4): a chord on each hit the voice owns, for the hit's gate.
     for (Step s = w.stepFrom(gi, from); s.nominal < to; s = w.after(gi, s)) {
-        if (!owned(s) || silent(s.bar) || voiceAt(s.bar).articulation != Articulation::Pulse) continue;
+        if (!owned(s) || silent(s.bar) || voiceAt(s.bar).articulation != Articulation::Pulse || strikeSource(s.bar)) continue;
         const GroupPlay& p = w.play(s.bar, gi);
         const Voice& v = voiceAt(s.bar);
         const int gatePercent = resolve(p.song(), p.group(), v).gatePercent;
-        const auto [root, major] = w.chordAt(s.tick);
-        const std::vector<int> chord = v.nearest ? voicedAt(w, gi, vi, s.tick) : chordNotes(p.song(), v, root, major);
+        const std::vector<int> chord = chordFor(p.song(), v, s.tick);
         const int n = p.repeats(s.bar, s.absStep);
         std::vector<Repeat> rs;
         if (n > 1) rs = ratchetOf(s, p.stepTicks(), n, gatePercent, hitVelocity(s), p.group().ramp);  // ratcheted (§4.6)
@@ -1137,13 +1293,44 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
             }
     }
 
+    // §4.8, Pulse with Strike with: Source: a chord on each of the source's steps that plays, for its gate (its gate
+    // class and step, the voice's Gate %), one strike per step.
+    if (w.pushOn())
+        for (std::int64_t bar = w.barOf(from); bar * w.barTicks() < to; ++bar) {
+            if (silent(bar) || voiceAt(bar).articulation != Articulation::Pulse) continue;
+            const auto src = strikeSource(bar);
+            if (!src) continue;
+            const GroupPlay& p = w.play(bar, gi);
+            const Voice& v = voiceAt(bar);
+            const int gatePercent = resolve(p.song(), p.group(), v).gatePercent;
+            for (const World::SourceStep& x : w.sourceSteps(*src, std::max(from, bar * w.barTicks()), std::min(to, (bar + 1) * w.barTicks()))) {
+                if (!x.plays) continue;
+                const std::vector<int> chord = chordFor(p.song(), v, x.tick);
+                const int vel = sourceVelocity(bar, x);
+                const std::int64_t len = gateTicks(x.stepTicks, w.play(x.bar, *src).gate(x.slot), gatePercent);
+                std::vector<std::int64_t> off(chord.size(), 0);
+                if (v.stagger > 0) off = staggerOffsets(p.song(), v, x.tick, chord, spreadAt(v, {x.tick}));
+                for (std::size_t k = 0; k < chord.size(); ++k) {
+                    const int note = chord[k];
+                    out.push_back({x.tick + off[k], x.tick + len + off[k], v.channel, note,
+                                   humanVelocity(p.song(), v, x.nominal, note, topVelocity(chord, note, vel, v.top)), v.id});
+                }
+            }
+        }
+
     // Sustain and Restrike: the chord holds from change to change. At a change, notes both chords share carry on;
     // a restrike (a hit the voice owns), the start of each pass through the progression, and a re-anchored harmony
     // strike everything afresh. So the walk starts at the fresh point at or before `from` and stops at the first fresh
     // point whose notes all start at or after `to`, where every note started before `to` has ended.
     const State& st0 = w.state(w.barOf(from));
     const std::int64_t cycle0 = changeTicks(st0.song) * clampi(st0.song.harmony.length, 1, 16);
-    const std::int64_t start = st0.harmonyAnchor + floorDiv(from - st0.harmonyAnchor, cycle0) * cycle0;
+    std::int64_t start = st0.harmonyAnchor + floorDiv(from - st0.harmonyAnchor, cycle0) * cycle0;
+    if (w.pushOn() && !voiceAt(w.barOf(start)).onGrid) {
+        // §4.8: the pass is struck where its first change arrives; one that arrives after `from` starts the walk a
+        // pass earlier (a pass that isn't the anchor's has one before it, on the same anchor).
+        if (w.arrival(start) > from) start -= cycle0;
+        start = w.arrival(start);
+    }
     // Around starts a note up to half the largest spread (120 ticks) before its strike.
     constexpr std::int64_t kEarliest = 240 / 2;
 
@@ -1171,8 +1358,7 @@ void chordVoiceNotes(World& w, std::size_t gi, int vi, std::int64_t from, std::i
             }
             const Voice& v = voiceAt(bar);
             const Song& song = w.state(bar).song;
-            const auto [root, major] = w.chordAt(b.tick);
-            const std::vector<int> chord = v.nearest ? voicedAt(w, gi, vi, b.tick) : chordNotes(song, v, root, major);
+            const std::vector<int> chord = chordFor(song, v, b.tick);
             std::vector<int> leaving, starting;  // both ascending
             for (const auto& kv : sounding)
                 if (b.fresh || !std::binary_search(chord.begin(), chord.end(), kv.first)) leaving.push_back(kv.first);
@@ -1542,6 +1728,7 @@ std::int64_t changeTicks(const Song& song) {
 std::vector<int> progression(const Song& song) { return detail::progressionOf(song, {}); }
 
 int chordRootAt(const Song& song, std::int64_t tick) { return World(song).chordRoot(tick); }
+std::int64_t pushArrival(const Song& song, std::int64_t gridTick, std::int64_t endBar) { return World(song, -1, endBar).arrival(gridTick); }
 
 Song stateAt(const Song& song, std::int64_t bar) {
     if (hasForm(song)) {  // §18.1: the section's letter, at the section's own bar
@@ -1671,7 +1858,8 @@ std::vector<Note> ringingAt(World& w, const Song& song, std::int64_t tick) {
     std::vector<Note> out;
     if (tick <= 0) return out;
     const State& st = w.state(w.barOf(tick));
-    const std::int64_t lookback = changeTicks(st.song) * clampi(st.song.harmony.length, 1, 16) + w.barTicks();
+    // §4.8: one change further under Push, since an early arrival sounds in the bar before its own.
+    const std::int64_t lookback = changeTicks(st.song) * (clampi(st.song.harmony.length, 1, 16) + (w.pushOn() ? 1 : 0)) + w.barTicks();
     for (std::size_t gi = 0; gi < song.groups.size(); ++gi)
         for (int vi = 0; vi < static_cast<int>(song.groups[gi].voices.size()); ++vi) {
             if (song.groups[gi].voices[vi].type != VoiceType::Chord) continue;
@@ -2064,7 +2252,8 @@ std::vector<Lane> View::lanes(std::int64_t tick) {
         // Where the group is at this tick (its step under this bar's state).
         const Step now = w.before(gi, w.stepFrom(gi, tick + 1));
         lane.playing = now.valid ? now.slot : -1;
-        const auto [root, major] = w.chordAt(tick);
+        // §4.8: the chord the group's first voice hears, where Push has it.
+        const auto [root, major] = w.chordHeard(tick, g.voices.empty() || g.voices.front().onGrid);
         bool chords = !g.voices.empty();
         lane.held = !g.voices.empty();
         for (const Voice& v : g.voices) {
@@ -2223,7 +2412,10 @@ HarmonyView View::harmony(std::int64_t tick) {
         h.roots.push_back(rk[static_cast<std::size_t>(prog[k])]);
         h.names.push_back(chordName(s, rk[static_cast<std::size_t>(prog[k])], size, major[k]));
     }
-    h.current = static_cast<int>(floorMod(floorDiv(tick - st.harmonyAnchor, changeTicks(s)), static_cast<std::int64_t>(prog.size())));
+    // §4.8: the change heard now, which Push can bring in before its grid tick or hold past it.
+    const std::int64_t heard = w.heardTick(tick, false);
+    const State& hs = w.state(w.barOf(heard));
+    h.current = static_cast<int>(floorMod(floorDiv(heard - hs.harmonyAnchor, changeTicks(hs.song)), static_cast<std::int64_t>(prog.size())));
     h.phraseLength = std::max(1, s.phraseLength);
     h.phraseBar = static_cast<int>(floorMod(bar, h.phraseLength));
     return h;

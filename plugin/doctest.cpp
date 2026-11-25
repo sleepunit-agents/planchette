@@ -46,6 +46,9 @@ int main() {
     s.groups[2].voices[0].stagger = 9, s.groups[2].voices[0].staggerOrder = StaggerOrder::Seeded;  // §3.4b
     s.groups[2].voices[0].staggerLean = StaggerLean::Around, s.groups[2].voices[0].top = 7;
     s.groups[0].voices[0].humanVelocity = 12, s.groups[0].voices[0].humanTiming = 70;
+    s.harmony.push.source = s.groups[0].id, s.harmony.push.amount = 12, s.harmony.push.early = 2;  // §4.8
+    s.harmony.push.late = 1, s.harmony.push.hits = PushHits::Accents;
+    s.groups[2].voices[0].strikeWith = StrikeWith::Source, s.groups[1].voices[0].onGrid = true;
     Row& r1 = addRow(s);
     r1.scope = Scope::Global, r1.param = Param::Range, r1.every = 2, r1.maxShift = 3, r1.min = 4, r1.max = 12, r1.chance = 70;
     Row& r2 = addRow(s);
@@ -87,7 +90,11 @@ int main() {
                           back.groups[1].handoff == 10 && back.groups[0].cleanHandoffs && !back.groups[1].cleanHandoffs &&
                           back.groups[2].voices[0].stagger == 9 && back.groups[2].voices[0].staggerOrder == StaggerOrder::Seeded &&
                           back.groups[2].voices[0].staggerLean == StaggerLean::Around && back.groups[2].voices[0].top == 7 &&
-                          back.groups[1].voices[0].stagger == 0 && back.groups[1].voices[0].top == 0;
+                          back.groups[1].voices[0].stagger == 0 && back.groups[1].voices[0].top == 0 &&
+                          back.harmony.push.source == back.groups[0].id && back.harmony.push.amount == 12 &&
+                          back.harmony.push.early == 2 && back.harmony.push.late == 1 && back.harmony.push.hits == PushHits::Accents &&
+                          back.groups[2].voices[0].strikeWith == StrikeWith::Source && back.groups[1].voices[0].onGrid &&
+                          !back.groups[0].voices[0].onGrid && back.groups[0].voices[0].strikeWith == StrikeWith::OwnHits;
     std::printf("%zu notes over 32 bars; round trip: notes %s, JSON %s (%d bytes)\n", notes(s, 0, end).size(),
                 sameNotes ? "identical" : "DIFFER", sameText ? "identical" : "DIFFERS", text.length());
 

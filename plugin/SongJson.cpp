@@ -482,6 +482,18 @@ juce::var toVar(const Song& s) {
     h->setProperty("range", s.harmony.range);
     h->setProperty("wander", s.harmony.wander);
     h->setProperty("locked", s.harmony.locked);
+    {  // §4.8: written only when it isn't all defaults, so a song that doesn't push is the file it was
+        const Harmony::Push& pu = s.harmony.push;
+        if (pu.source != 0 || pu.amount != 16 || pu.early != 1 || pu.late != 0 || pu.hits != PushHits::All) {
+            auto* po = new juce::DynamicObject();
+            po->setProperty("source", hex(pu.source));
+            po->setProperty("amount", pu.amount);
+            po->setProperty("early", pu.early);
+            po->setProperty("late", pu.late);
+            po->setProperty("hits", static_cast<int>(pu.hits));
+            h->setProperty("push", juce::var(po));
+        }
+    }
     root->setProperty("harmony", juce::var(h));
 
     juce::Array<juce::var> groups;
@@ -550,6 +562,8 @@ juce::var toVar(const Song& s) {
             if (v.staggerOrder != StaggerOrder::Up) vo->setProperty("staggerOrder", static_cast<int>(v.staggerOrder));
             if (v.staggerLean != StaggerLean::Late) vo->setProperty("staggerLean", static_cast<int>(v.staggerLean));
             if (v.top != 0) vo->setProperty("top", v.top);
+            if (v.onGrid) vo->setProperty("onGrid", true);  // §4.8, likewise
+            if (v.strikeWith != StrikeWith::OwnHits) vo->setProperty("strikeWith", static_cast<int>(v.strikeWith));
             vo->setProperty("tie", v.tie);
             vo->setProperty("lockNotes", v.lockNotes);
             if (v.density != 8) vo->setProperty("density", v.density);  // §5.8: written only when it isn't the default
@@ -632,6 +646,13 @@ Song fromVar(const juce::var& v) {
     s.harmony.range = num(h, "range", s.harmony.range);
     s.harmony.wander = num(h, "wander", s.harmony.wander);
     s.harmony.locked = flag(h, "locked", false);
+    if (const juce::var pu = h["push"]; pu.isObject()) {  // §4.8: a song from before it doesn't push
+        s.harmony.push.source = unhex(pu["source"], 0);
+        s.harmony.push.amount = num(pu, "amount", 16);
+        s.harmony.push.early = num(pu, "early", 1);
+        s.harmony.push.late = num(pu, "late", 0);
+        s.harmony.push.hits = static_cast<PushHits>(num(pu, "hits", 0));
+    }
 
     if (const auto* groups = v["groups"].getArray())
         for (const juce::var& o : *groups) {
@@ -692,6 +713,8 @@ Song fromVar(const juce::var& v) {
                     x.staggerOrder = static_cast<StaggerOrder>(num(vo, "staggerOrder", 0));
                     x.staggerLean = static_cast<StaggerLean>(num(vo, "staggerLean", 0));
                     x.top = num(vo, "top", 0);
+                    x.onGrid = flag(vo, "onGrid", false);  // §4.8: a song from before it hears the harmony as it was
+                    x.strikeWith = static_cast<StrikeWith>(num(vo, "strikeWith", 0));
                     x.tie = flag(vo, "tie", false);
                     x.lockNotes = flag(vo, "lockNotes", false);
                     x.density = num(vo, "density", 8);
