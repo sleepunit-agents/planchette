@@ -20,7 +20,7 @@ AUv3 on iPad (AUM, Loopy Pro, Drambo) and VST3 / AU in Ableton Live, from one co
   `hosttest.cpp`, a host in miniature that loads the built plugin, presses Play, and checks its MIDI against the
   engine note for note.
 
-  `snapshot.cpp` draws the editor while playing to a PNG, so the UI can be seen without a DAW.
+  `snapshot.cpp` draws the editor while playing to a PNG, so the UI can be seen without a DAW. CI draws every page on Linux and uploads them as the `screens` artifact (`gh run download <run> -n screens`).
 
 ![Play](docs/screen-play.png)
 

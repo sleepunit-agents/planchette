@@ -99,6 +99,23 @@ jobs:
         with:
           name: Planchette-${{ runner.os }}
           path: Planchette-${{ runner.os }}.zip
+      - name: The screens, drawn (Linux)
+        # Every page of the editor while playing, as PNGs (snapshot.cpp), so a UI change can be seen without a DAW:
+        # `gh run download <run> -n screens`.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake --build build --config Release --parallel 4 --target PlanchetteSnapshot
+          snap=$(find build -type f -name 'PlanchetteSnapshot' | head -1)
+          mkdir -p screens
+          for page in 0:play 1:groups 2:changes 3:song 4:form; do
+            xvfb-run -a "$snap" "screens/${page#*:}.png" 1 4.3 "${page%%:*}"
+          done
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: screens
+          path: screens/
 
   publish:
     # Whatever platforms passed get published; a platform that failed is left out rather than holding the rest back.
