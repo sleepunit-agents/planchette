@@ -1,4 +1,4 @@
-// planchette_snapshot out.png [seed-hex | song.planchette] [bar] [page 0-3]: the editor as it looks while playing, drawn to a PNG. It links the
+// planchette_snapshot out.png [seed-hex | song.planchette] [bar] [page 0-4: Play, Groups, Changes, Song, Form]: the editor as it looks while playing, drawn to a PNG. It links the
 // plugin's own processor and editor (no host, no wrapper), plays to the bar, and draws the window. For seeing UI
 // changes without a DAW.
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -26,7 +26,7 @@ struct Head : juce::AudioPlayHead {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: planchette_snapshot out.png [seed-hex | song.planchette] [bar] [page 0-3]\n");
+        std::fprintf(stderr, "usage: planchette_snapshot out.png [seed-hex | song.planchette] [bar] [page 0-4]\n");
         return 2;
     }
     const juce::ScopedJuceInitialiser_GUI juce;
