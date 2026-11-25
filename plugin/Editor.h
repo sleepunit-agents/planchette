@@ -21,6 +21,8 @@ public:
 
     // Which screen shows: 0 Play, 1 Groups, 2 Changes, 3 Song, 4 Form.
     void showPage(int i);
+    // What the timer does, now: tests call it so they don't hang on the clock (a slow CI box can miss a tick).
+    void tick() { timerCallback(); }
 
 private:
     void timerCallback() override;

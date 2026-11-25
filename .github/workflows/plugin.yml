@@ -1,21 +1,23 @@
 name: plugin
 # Linux and Windows build on every run. macOS builds on pushes (main and version tags), so every release has it;
-# on pull requests it's optional (repository variable HOCKET_HOSTED=true).
+# on pull requests it's optional (repository variable HOCKET_HOSTED=true). Run it by hand (Actions > plugin > Run
+# workflow) for all three platforms on any branch, without publishing.
 # Pushes publish downloads: main moves the rolling "nightly" pre-release, a vX.Y.Z tag cuts a release (see README).
 on:
   push:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
 jobs:
   build:
     # Run trusted repository branches only.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
         os: [linux, windows, macos-latest]
-        exclude: ${{ fromJSON((vars.HOCKET_HOSTED == 'true' || github.event_name == 'push') && '[]' || '[{"os":"macos-latest"}]') }}
+        exclude: ${{ fromJSON((vars.HOCKET_HOSTED == 'true' || github.event_name != 'pull_request') && '[]' || '[{"os":"macos-latest"}]') }}
     name: build (${{ matrix.os }})
     defaults:
       run:

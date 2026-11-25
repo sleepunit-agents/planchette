@@ -112,6 +112,9 @@ public:
 
     // Where the host is, for the editor: the song's tick while playing, −1 when stopped.
     std::int64_t playheadTick() const { return tick_.load(); }
+
+    // What the timer does, now: tests call it so they don't hang on the clock (a slow CI box can miss a tick).
+    void tick() { timerCallback(); }
     // The host's meter, when it reports one: {beats, unit}; {0, 0} when it doesn't (the song's own meter plays).
     std::pair<int, int> hostMeter() const {
         const int m = hostMeter_.load();
